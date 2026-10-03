@@ -6,6 +6,13 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { audioToWav, DEFAULT_TEXT_MODEL, DIPLOMATIC_STATUSES, FACTION_IDS, isAllowedLocalRequest, loadMemoryStore, normalizeWarfareUpdate, persistMemoryStore, readGeminiCredential, redactError, RuntimeStatus, serverConfiguration } from './server-lib/compatibility.ts';
 import { WorldState } from './server-lib/world.ts';
 import { installWorldRoutes } from './server-lib/world-routes.ts';
+import { SettingsStore } from './server-lib/settings-store.ts';
+import { installSettingsRoutes } from './server-lib/settings-routes.ts';
+import { GeminiProvider, providerError } from './server-lib/ai-provider.ts';
+import { AiService } from './server-lib/ai-service.ts';
+import { installAiRoutes } from './server-lib/ai-routes.ts';
+import { meteredLegacyClient } from './server-lib/ai-legacy.ts';
+import { createDiagnosticReport, writeDiagnosticReport } from './server-lib/diagnostics.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,7 +25,7 @@ const TTS_MODEL = process.env.GEMINI_TTS_MODEL || 'gemini-3.8-flash-lite-tts';
 const knownSecrets = new Set<string>();
 let client: GoogleGenAI | null = null;
 let clientKey: string | null = null;
-function getAI(): GoogleGenAI {
+function getRawAI(): GoogleGenAI {
   const key = readGeminiCredential();
   if (!key) throw new Error('Gemini is not configured. Set a private backend key or use the existing game settings.');
   knownSecrets.add(key);
@@ -30,9 +37,15 @@ function getAI(): GoogleGenAI {
 }
 function hasGemini() { return readGeminiCredential() !== null; }
 function safeError(error: unknown) { return redactError(error, knownSecrets); }
-function logUpstream(context: string, error: unknown) { console.warn(context, safeError(error)); }
+function logUpstream(context: string, error: unknown) { console.warn(context, providerError(error).code); }
 const runtime = new RuntimeStatus();
 const world = new WorldState(path.join(process.env.LLAI_DATA_DIR || path.join(__dirname, 'data'), 'world-settings.json'));
+const npcDataDirectory = process.env.LLAI_DATA_DIR || path.join(process.env.LOCALAPPDATA || path.join(__dirname, 'data'), 'LivingLosSantos', 'Enhanced');
+export const npcSettings = new SettingsStore(path.join(npcDataDirectory, 'npc-settings-v4.json'));
+export const aiProvider = new GeminiProvider(getRawAI, hasGemini);
+export const aiService = new AiService({ provider: aiProvider, getSettings: () => npcSettings.snapshot().settings, directory: npcDataDirectory });
+npcSettings.subscribe(() => aiService.settingsChanged());
+function getAI(): GoogleGenAI { return meteredLegacyClient(getRawAI(), aiService.budget, aiService.scheduler, () => aiService.scope(), () => npcSettings.snapshot().settings); }
 
 // Native clients have no Origin. Browser calls must originate from this loopback companion.
 app.use('/api', (req, res, next) => {
@@ -62,13 +75,14 @@ async function bridgeStatus() {
 app.get('/api/health', async (req, res) => {
   res.json({
     status: 'online',
-    version: '3.0.0-enhanced-world',
+    version: '4.0.0-enhanced-foundation',
     model: TEXT_MODEL,
     geminiConfigured: hasGemini(),
     mode: 'enhanced-companion',
     gameRuntime: runtime.summary(),
     bridge: await bridgeStatus(),
-    worldRuntime: { protocol: 3, connected: world.snapshot().connected, runtimeId: world.snapshot().runtimeId },
+    worldRuntime: { protocol: 4, legacyProtocol: 3, connected: world.snapshot().connected, runtimeId: world.snapshot().runtimeId },
+    npcRuntime: aiService.status().runtime,
     tacticalMLEngine: 'In-game encounter director with bounded utility tactics and observed battle outcomes',
     cloudSyncEnabled: false,
   });
@@ -81,9 +95,18 @@ app.post('/api/runtime/telemetry', (req, res) => {
   } catch (error) { res.status(400).json({ success: false, error: safeError(error) }); }
 });
 app.get('/api/runtime/status', (req, res) => res.json({ success: true, ...runtime.snapshot() }));
-installWorldRoutes(app, world, telemetry => {
+const recordWorldTelemetry = (telemetry: unknown) => {
   const input = telemetry as Record<string, unknown>;
   runtime.record({ ...input, player: input.player ?? undefined, environment: input.environment ?? undefined });
+};
+installSettingsRoutes(app, npcSettings);
+installAiRoutes(app, aiService, world, npcSettings, recordWorldTelemetry);
+installWorldRoutes(app, world, recordWorldTelemetry);
+const diagnosticReport = () => createDiagnosticReport({ settings: npcSettings.snapshot(), world: world.snapshot(), ai: aiService.status(), audio: { available: false } });
+app.get('/api/diagnostics', (_req, res) => res.json({ success: true, report: diagnosticReport() }));
+app.post('/api/diagnostics/export', (_req, res) => {
+  try { res.json({ success: true, ...writeDiagnosticReport(path.join(npcDataDirectory, 'diagnostics'), diagnosticReport()) }); }
+  catch { res.status(500).json({ success: false, error: 'Sanitized diagnostic report could not be saved.' }); }
 });
 
 // Local companion memory only; independent of the installed mod and Firebase.

@@ -1,0 +1,85 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Activity, AlertCircle, Check, RefreshCw, Search, Settings2, Shield, Volume2, X } from 'lucide-react';
+import type { SettingDefinition, NpcSettings, SettingValue } from '../../shared/settings';
+import { api, humanize, timeAgo } from '../lib/world';
+import { Badge, Empty, PanelHeading, Stat } from './WorldControl';
+import './npc-foundation.css';
+
+type SettingsSnapshot = { revision: number; settings: NpcSettings; source: string; updatedAt: string; catalog: SettingDefinition[]; appliedRevision?: number };
+type AiStatus = {
+  success: true; protocol: number;
+  capabilities: { jobs: boolean; streamingSpeech: boolean; lanes: string[]; activeJobKinds: string[]; provider: string; models: { id: string; available: boolean | null; structuredOutput: boolean; streaming: boolean }[] };
+  scheduler: { queued: number; running: number; byLane: Record<string, number>; breaker: { state: string; failures: number; retryAt: string | number | null } };
+  budget: { currency: string; day: string; dailyLimitUsd: number; spentEstimateUsd: number; reservedEstimateUsd: number; remainingUsd: number; sessionSpentEstimateUsd: number; usage: { inputTokens: number; outputTokens: number; cachedTokens: number; thoughtTokens: number; totalTokens: number }; requests: number; unknownUsageRequests: number; priceVersion: string };
+  recentJobs: { id: string; kind: string; lane: string; status: string; source: string; createdAt: string; finishedAt?: string; firstTextMs?: number; durationMs?: number; reasonCode?: string }[];
+};
+
+function useCompanionResource<T>(url: string) {
+  const [data, setData] = useState<T | null>(null), [error, setError] = useState(''), [receivedAt, setReceivedAt] = useState(0);
+  const controller = useRef<AbortController | null>(null), mounted = useRef(false);
+  const refresh = useCallback(async () => {
+    if (controller.current) return;
+    const request = new AbortController(); controller.current = request;
+    try { const next = await api<T>(url, { signal: request.signal }); if (mounted.current) { setData(next); setError(''); setReceivedAt(Date.now()); } }
+    catch (e) { if (mounted.current && !request.signal.aborted) setError(e instanceof Error ? e.message : 'Companion data is unavailable.'); }
+    finally { if (controller.current === request) controller.current = null; }
+  }, [url]);
+  useEffect(() => { mounted.current = true; void refresh(); const timer = setInterval(refresh, 5000); return () => { mounted.current = false; clearInterval(timer); controller.current?.abort(); controller.current = null; }; }, [refresh]);
+  return { data, setData, error, receivedAt, refresh };
+}
+
+function ResourceStatus({ error, at, now }: { error: string; at: number; now: number }) {
+  return <div className={`resource-status ${error ? 'resource-stale' : ''}`} role="status"><span className={`live-dot ${at && !error ? 'on' : ''}`} /><span>{error ? 'Last observed data · ' + error : at ? 'Companion data · refreshed ' + timeAgo(new Date(at).toISOString(), now) : 'Connecting to the local companion…'}</span></div>;
+}
+
+export function NpcSettingsPanel({ companionFresh, now }: { companionFresh: boolean; now: number }) {
+  const resource = useCompanionResource<SettingsSnapshot>('/api/settings');
+  const [group, setGroup] = useState('General'), [search, setSearch] = useState(''), [draft, setDraft] = useState<NpcSettings>({});
+  const [baseRevision, setBaseRevision] = useState<number | null>(null), [saving, setSaving] = useState(false), [message, setMessage] = useState<{ error: boolean; text: string } | null>(null);
+  const current = resource.data, catalog = current?.catalog || [];
+  const groups = [...new Set(catalog.map(item => item.group))];
+  const changed = Object.keys(draft).filter(key => draft[key] !== current?.settings[key]);
+  const conflict = Boolean(changed.length && baseRevision !== null && current && current.revision !== baseRevision);
+  const filtered = catalog.filter(item => search ? `${item.label} ${item.key} ${item.group} ${item.tooltip}`.toLowerCase().includes(search.toLowerCase()) : item.group === group);
+  function change(key: string, value: SettingValue) { setMessage(null); if (baseRevision === null) setBaseRevision(current?.revision ?? null); setDraft(previous => ({ ...previous, [key]: value })); }
+  async function save() {
+    if (!current || !changed.length || saving) return;
+    const patch = Object.fromEntries(changed.map(key => [key, draft[key]])); setSaving(true); setMessage(null);
+    try {
+      const result = await api<SettingsSnapshot>('/api/settings', { method: 'PATCH', body: JSON.stringify({ settings: patch, source: 'portal', expectedRevision: baseRevision ?? current.revision }) });
+      resource.setData({ ...current, ...result }); setDraft({}); setBaseRevision(null);
+      setMessage({ error: false, text: `NPC settings revision ${result.revision} saved by the companion. Game application is reported separately when its acknowledgement is available.` });
+    } catch (e) { setMessage({ error: true, text: e instanceof Error ? e.message : 'Settings could not be saved.' }); void resource.refresh(); }
+    finally { setSaving(false); }
+  }
+  return <>
+    <ResourceStatus error={resource.error} at={resource.receivedAt} now={now} />
+    <div className="revision-bar"><div><Settings2 size={20} /><div><strong>{changed.length ? `${changed.length} unsaved ${changed.length === 1 ? 'change' : 'changes'}` : 'NPC settings catalogue'}</strong><span>{current ? `Saved revision ${current.revision} · Changed by ${current.source || 'companion'} · ${catalog.length} documented settings` : 'Waiting for the companion settings service'}</span></div></div><Badge tone={changed.length ? 'orange' : 'green'}>{changed.length ? 'Draft' : 'Saved locally'}</Badge></div>
+    {message && <div className={`notice ${message.error ? 'error' : 'success'}`} role="status"><AlertCircle size={17} /><span>{message.text}</span><button aria-label="Dismiss settings message" onClick={() => setMessage(null)}><X size={16} /></button></div>}
+    {conflict && <div className="notice error"><AlertCircle size={18} /><span>Another control saved revision {current?.revision} while you were editing. Your draft is retained. Review it against the latest saved values, then rebase to continue.</span><button className="button" onClick={() => setBaseRevision(current!.revision)} disabled={saving}>Keep draft on revision {current?.revision}</button></div>}
+    <section className="panel catalogue-panel"><PanelHeading eyebrow="NPC OVERHAUL" title="Make the city yours"><Badge>{catalog.length} settings</Badge></PanelHeading><div className="catalogue-toolbar"><label className="catalogue-search"><Search size={17} /><span className="sr-only">Search all NPC settings</span><input value={search} placeholder="Search settings, effects, or keys…" onChange={event => setSearch(event.target.value)} /></label><button className="button subtle" onClick={() => resource.refresh()} aria-label="Refresh settings"><RefreshCw size={15} /></button></div><div className={search ? "catalogue-layout searching" : "catalogue-layout"}><nav className="settings-groups" aria-label="Setting groups">{groups.map(name => <button key={name} className={!search && group === name ? 'active' : ''} onClick={() => { setGroup(name); setSearch(''); }}>{name}<span>{catalog.filter(item => item.group === name).length}</span></button>)}</nav><fieldset className="catalogue-fields" disabled={saving}>{filtered.length ? filtered.map(item => <CatalogueField key={item.key} item={item} value={draft[item.key] ?? current!.settings[item.key] ?? item.default} savedValue={current!.settings[item.key]} dirty={changed.includes(item.key)} onChange={value => change(item.key, value)} />) : <Empty icon={Search} title={current ? 'No matching settings' : 'Settings are not available yet'} >{current ? 'Try a different search or setting group.' : 'This panel reads the companion catalogue. It never supplies browser-only replacement settings.'}</Empty>}</fieldset></div></section>
+    <div className="save-bar"><div><strong>{changed.length ? `${changed.length} local ${changed.length === 1 ? "edit" : "edits"} ready to save` : 'Shared settings, one saved revision'}</strong><span>{!companionFresh ? 'Reconnect the companion to save. Your draft is retained.' : 'These settings are separate from the 14 world-director controls.'}</span></div><div className="button-row"><button className="button subtle" disabled={!changed.length || saving} onClick={() => { setDraft({}); setBaseRevision(null); }}>Discard draft</button><button className="button primary" disabled={!changed.length || !companionFresh || saving || conflict} onClick={save}><Check size={15} />{saving ? 'Saving…' : 'Save NPC settings'}</button></div></div>
+  </>;
+}
+
+function CatalogueField({ item, value, savedValue, dirty, onChange }: { item: SettingDefinition; value: SettingValue; savedValue: SettingValue; dirty: boolean; onChange: (value: SettingValue) => void }) {
+  const id = `setting-${item.key}`, hint = `${id}-hint`;
+  return <div className={`catalogue-field ${dirty ? 'edited' : ''}`}><div className="catalogue-label"><label htmlFor={id}>{item.label}</label><Badge tone={dirty ? 'orange' : undefined}>{dirty ? 'Edited' : item.consumer}</Badge></div><p id={hint}>{item.tooltip}</p><div className="catalogue-input">{item.type === 'boolean' ? <label className="catalogue-checkbox"><input id={id} type="checkbox" checked={Boolean(value)} aria-describedby={hint} onChange={event => onChange(event.target.checked)} /><span>{value ? 'Enabled' : 'Disabled'}</span></label> : item.type === 'select' ? <select id={id} value={String(value)} aria-describedby={hint} onChange={event => onChange(event.target.value)}>{item.options?.map(option => <option key={option} value={option}>{humanize(option)}</option>)}</select> : item.type === 'number' ? <div className="catalogue-number"><input id={id} type="number" value={Number(value)} min={item.min} max={item.max} step={item.step} aria-describedby={hint} onChange={event => { if (event.target.value !== '') onChange(Number(event.target.value)); }} /><span>{item.min} – {item.max}</span></div> : <input id={id} type="text" value={String(value)} maxLength={200} aria-describedby={hint} spellCheck={false} onChange={event => onChange(event.target.value)} />}</div><div className="catalogue-meta"><code>{item.key}</code><span>{dirty ? `Saved: ${String(savedValue)}` : `Default: ${String(item.default)}`}</span></div></div>;
+}
+
+const money = (value: number | undefined) => value === undefined || !Number.isFinite(value) ? '—' : '$' + value.toFixed(3);
+const count = (value: number | undefined) => value === undefined ? '—' : value.toLocaleString();
+function quantile(values: number[], q: number) { if (!values.length) return null; const sorted = [...values].sort((a,b) => a-b); return sorted[Math.ceil(sorted.length*q)-1]; }
+
+export function AiUsagePanel({ now }: { now: number }) {
+  const resource = useCompanionResource<AiStatus>('/api/ai/status'), status = resource.data;
+  const budget = status?.budget, scheduler = status?.scheduler;
+  const latencies = useMemo(() => status?.recentJobs.filter(job => job.status === 'completed' && typeof job.durationMs === 'number').map(job => job.durationMs!) || [], [status]);
+  const p50 = quantile(latencies, .5), p95 = quantile(latencies, .95);
+  return <><ResourceStatus error={resource.error} at={resource.receivedAt} now={now} />
+    <div className="stats-grid"><Stat label="ESTIMATED TODAY" value={money(budget?.spentEstimateUsd)} note={budget ? `${budget.currency} · ${budget.day}` : 'Waiting for usage ledger'} icon={Activity} accent /><Stat label="RESERVED" value={money(budget?.reservedEstimateUsd)} note="Held for in-flight provider work" icon={Shield} /><Stat label="REMAINING" value={money(budget?.remainingUsd)} note={budget ? `${money(budget.dailyLimitUsd)} daily cap` : 'Provider cap unavailable'} icon={Settings2} /><Stat label="PROVIDER QUEUE" value={scheduler ? `${scheduler.queued} / ${scheduler.running}` : '—'} note="Queued / running requests" icon={Activity} /></div>
+    <div className="two-columns"><section className="panel"><PanelHeading eyebrow="PROVIDER METER" title="Actual requests & tokens"><Badge tone={scheduler?.breaker.state === 'closed' ? 'green' : 'orange'}>{scheduler ? `Circuit ${scheduler.breaker.state}` : 'Unavailable'}</Badge></PanelHeading><dl className="diagnostics"><div><dt>Provider</dt><dd>{status?.capabilities.provider || '—'}</dd></div><div><dt>Requests today</dt><dd>{count(budget?.requests)}</dd></div><div><dt>Input / output tokens</dt><dd>{count(budget?.usage.inputTokens)} / {count(budget?.usage.outputTokens)}</dd></div><div><dt>Cached input tokens</dt><dd>{count(budget?.usage.cachedTokens)}</dd></div><div><dt>Thought tokens</dt><dd>{count(budget?.usage.thoughtTokens)}</dd></div><div><dt>Unknown-usage requests</dt><dd>{count(budget?.unknownUsageRequests)}</dd></div><div><dt>Pricing version</dt><dd>{budget?.priceVersion || '—'}</dd></div><div><dt>Session estimate</dt><dd>{money(budget?.sessionSpentEstimateUsd)}</dd></div></dl><p className="panel-footnote">Cost is a local estimate, not an invoice. An interrupted request with unknown usage keeps its conservative reservation. Cache hits do not imply a new provider call.</p></section>
+    <section className="panel"><PanelHeading eyebrow="MEASURED LATENCY" title="How quickly the AI responds" /><dl className="diagnostics"><div><dt>Completed samples shown</dt><dd>{latencies.length}</dd></div><div><dt>Full response p50 / p95</dt><dd>{p50 === null ? 'No measured samples' : `${(p50/1000).toFixed(2)}s / ${(p95!/1000).toFixed(2)}s`}</dd></div><div><dt>Active job types</dt><dd>{status?.capabilities.activeJobKinds.join(', ') || '—'}</dd></div><div><dt>Provider failures</dt><dd>{scheduler?.breaker.failures ?? '—'}</dd></div><div><dt>Retry allowed</dt><dd>{scheduler?.breaker.retryAt ? new Date(scheduler.breaker.retryAt).toLocaleTimeString() : 'No cooldown reported'}</dd></div></dl><p className="panel-footnote">These times cover the recent completed provider jobs shown below. They do not measure sound reaching your speakers. Native audio metrics appear after the companion audio engine is enabled.</p><div className="model-capabilities">{status?.capabilities.models.map(model => <div key={model.id}><code>{model.id}</code><Badge tone={model.available === true ? 'green' : 'orange'}>{model.available === true ? 'Available' : model.available === false ? 'Unavailable' : 'Not checked'}</Badge></div>)}</div></section></div>
+    <section className="panel ai-jobs-panel"><PanelHeading eyebrow="REQUEST HISTORY" title="Recent AI jobs"><Badge>{status?.recentJobs.length ?? 0} observed</Badge></PanelHeading>{status?.recentJobs.length ? <div className="ai-job-list">{status.recentJobs.map(job => <article key={job.id}><div><strong>{humanize(job.kind)} <span>Lane {job.lane}</span></strong><code>{job.id}</code><p>{job.reasonCode ? humanize(job.reasonCode) : `${job.source || 'Awaiting source'} · ${timeAgo(job.createdAt, now)}`}</p></div><div><Badge tone={job.status === 'completed' ? 'green' : 'orange'}>{humanize(job.status)}</Badge><span>{typeof job.durationMs === 'number' ? `${(job.durationMs/1000).toFixed(2)}s` : 'In progress'}</span>{typeof job.firstTextMs === 'number' && <small>First text {(job.firstTextMs/1000).toFixed(2)}s</small>}</div></article>)}</div> : <Empty icon={Volume2} title="No provider jobs reported" >Use an in-game conversation to create a real request. No sample activity is added to this meter.</Empty>}</section>
+  </>;
+}

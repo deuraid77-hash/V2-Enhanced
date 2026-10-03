@@ -25,8 +25,12 @@ $nativeFields = ($api.MainModule.Types | Where-Object FullName -EQ 'GTA.Native.H
 $nativeChecks = @($nativeNames | ForEach-Object { $name = $_; $field = $nativeFields | Where-Object Name -EQ $name; [PSCustomObject]@{Name=$name;Present=$null -ne $field;Hash=if($field){'0x{0:X16}' -f $field.Constant}else{$null}} })
 $offline = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build\offline-tests.json') -Raw | ConvertFrom-Json
 $sources = @($sourceText)
-$customMemoryOrPInvoke = [bool](($sources -join "`n") -match 'DllImport|Marshal\.|unsafe\s|MemoryAddress|MemoryAccess|FindPattern|ReadProcessMemory|WriteProcessMemory')
-$files = @('LivingLSAIsV2.Enhanced.cs','WorldDirector.cs','WorldPolicy.cs','ResponsePolicy.cs','DashboardTransport.cs','LivingLSAIsV2.Enhanced.csproj','Build-EnhancedClient.ps1','Test-EnhancedClient.ps1','Build-WorldProbe.ps1','test\OfflineTests.cs','test\WorldPolicyTests.cs','test\WorldContractProbe.cs','test\DashboardContractProbe.cs','bin\LivingLSAIsV2.Enhanced.dll') | ForEach-Object { $file=Join-Path $PSScriptRoot $_; [PSCustomObject]@{Path=$_;SHA256=(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash;Bytes=(Get-Item -LiteralPath $file).Length} }
+# Scan C# code tokens, not tooltip strings such as "unsafe scene changes".
+$codeText = [regex]::Replace($sourceText,'@"(?:""|[^"])*"|"(?:\\.|[^"\\])*"|//[^\r\n]*|/\*[\s\S]*?\*/',' ')
+$customMemoryOrPInvoke = [bool]($codeText -match 'DllImport|Marshal\.|unsafe\s|MemoryAddress|MemoryAccess|FindPattern|ReadProcessMemory|WriteProcessMemory')
+$compiledImports = @($client.MainModule.Types | ForEach-Object { $_.Methods } | Where-Object IsPInvokeImpl)
+$customMemoryOrPInvoke = $customMemoryOrPInvoke -or $compiledImports.Count -gt 0
+$files = @('LivingLSAIsV2.Enhanced.cs','WorldDirector.cs','WorldPolicy.cs','ResponsePolicy.cs','DashboardTransport.cs','FoundationPolicy.cs','RuntimeCompatibility.cs','InputRouter.cs','SettingsCatalog.Generated.cs','LivingLSAIsV2.Enhanced.csproj','Build-EnhancedClient.ps1','Test-EnhancedClient.ps1','Build-WorldProbe.ps1','Build-FoundationProbe.ps1','test\OfflineTests.cs','test\WorldPolicyTests.cs','test\FoundationTests.cs','test\FoundationContractProbe.cs','test\WorldContractProbe.cs','test\DashboardContractProbe.cs','bin\LivingLSAIsV2.Enhanced.dll') | ForEach-Object { $file=Join-Path $PSScriptRoot $_; [PSCustomObject]@{Path=$_;SHA256=(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash;Bytes=(Get-Item -LiteralPath $file).Length} }
 $result = [ordered]@{
     CheckedAtUTC=[DateTime]::UtcNow.ToString('o')
     GameFileVersion=(Get-Item -LiteralPath (Join-Path $GameRoot 'GTA5_Enhanced.exe')).VersionInfo.FileVersion
@@ -34,6 +38,8 @@ $result = [ordered]@{
     ApiFileVersion=(Get-Item -LiteralPath $apiPath).VersionInfo.FileVersion
     ApiSHA256=(Get-FileHash -LiteralPath $apiPath -Algorithm SHA256).Hash
     ClientAssemblyVersion=$client.Name.Version.ToString()
+    ClientProtocol=4
+    FoundationOnly=$true
     TargetFramework='.NET Framework 4.8'
     Compiler=(Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
     ModuleArchitecture=$client.MainModule.Architecture.ToString()

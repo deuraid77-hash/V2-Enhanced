@@ -1,4 +1,6 @@
-# Living Los Santos 3 — Enhanced world director
+# Living Los Santos — Enhanced game client
+
+**Current source is the protocol 4 NPC foundation, not a finished overhaul release.** See [FOUNDATION.md](FOUNDATION.md) for its implemented behavior, stage limits, new probe and evidence. The v3 world director remains the underlying game-world subsystem; the notes below describe that subsystem and its previous acceptance scope. No v4 game installation or physical controller acceptance is implied by an offline build.
 
 This is the actual GTA V Enhanced Story Mode client for the live portal. It targets .NET Framework 4.8 and the installed Enhanced ScriptHookVDotNet3 API 3.9.0.0. The inspected executable is 1.0.1158.16. It builds as `LivingLSAIsV2.Enhanced.dll` for upgrade continuity, assembly version 3.0.1.0.
 

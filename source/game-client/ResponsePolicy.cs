@@ -14,7 +14,7 @@ namespace LivingLosSantosV2
             var text = new StringBuilder();
             foreach (char character in raw)
             {
-                if (character == '~' || Char.IsControl(character)) continue;
+                if (character == '~' || character == '<' || character == '>' || Char.IsControl(character)) continue;
                 if (text.Length >= limit) break;
                 text.Append(character);
             }

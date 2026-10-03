@@ -1,0 +1,36 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using LivingLosSantosV2;
+
+internal static class FoundationTests
+{
+    private static void Assert(bool condition) { if(!condition) throw new Exception("Foundation assertion failed."); }
+    private static void Reject(Action action) { bool rejected=false; try {action();} catch {rejected=true;} Assert(rejected); }
+    private static Dictionary<string,object> Update(string id,string runtime,string epoch,DateTime expires)
+    { return new Dictionary<string,object>{{"id",id},{"runtimeId",runtime},{"sceneEpoch",epoch},{"expiresAt",expires.ToString("o")}}; }
+    public static void Run(Action<string,Action> check)
+    {
+        check("NPC mind preserves valid zero and clamps bounded deltas",delegate { var m=new NpcMind{Fear=0,Aggression=98,Trust=99,Respect=1}; m.Apply(new Dictionary<string,object>{{"fear",-1000},{"aggression",400},{"trust",999},{"respect",-999}}); Assert(m.Fear==0&&m.Aggression==100&&m.Trust==100&&m.Respect==0); });
+        check("NPC mind mood sanitizes GTA and markup delimiters",delegate { var m=new NpcMind(); m.Apply(new Dictionary<string,object>{{"mood","~r~<angry>"}}); Assert(m.Mood=="rangry"); });
+        check("invalid mind delta cannot partially mutate state",delegate { var m=new NpcMind(); Reject(delegate {m.Apply(new Dictionary<string,object>{{"fear",10},{"trust","lots"}});}); Assert(m.Fear==20&&m.Revision==0); });
+        check("nonfinite mind deltas rejected",delegate { var m=new NpcMind(); Reject(delegate {m.Apply(new Dictionary<string,object>{{"fear",Double.NaN}});}); Reject(delegate {m.Apply(new Dictionary<string,object>{{"morale",Double.PositiveInfinity}});}); });
+        check("AI update current scene applies at most once",delegate { var g=new AiUpdateGate(); string error; var u=Update("u","r","scene",DateTime.UtcNow.AddSeconds(30)); Assert(g.TryClaim(u,"r","scene",DateTime.UtcNow,out error)); Assert(!g.TryClaim(u,"r","scene",DateTime.UtcNow,out error)); });
+        check("AI update rejects stale session epoch and deadline",delegate { var g=new AiUpdateGate(); string error; Assert(!g.TryClaim(Update("u","old","scene",DateTime.UtcNow.AddSeconds(1)),"r","scene",DateTime.UtcNow,out error)); Assert(!g.TryClaim(Update("u","r","old",DateTime.UtcNow.AddSeconds(1)),"r","scene",DateTime.UtcNow,out error)); Assert(!g.TryClaim(Update("u","r","scene",DateTime.UtcNow.AddSeconds(-1)),"r","scene",DateTime.UtcNow,out error)); });
+        check("AI entity gate rejects reused handle and protected or departed NPC",delegate { Assert(AiUpdateGate.EntityAllowed(1,10,1,10,true,true,true,false,false,5,12)); Assert(!AiUpdateGate.EntityAllowed(1,10,1,11,true,true,true,false,false,5,12)); Assert(!AiUpdateGate.EntityAllowed(1,10,1,10,true,true,true,true,false,5,12)); Assert(!AiUpdateGate.EntityAllowed(1,10,1,10,true,true,true,false,false,Double.NaN,12)); Assert(!AiUpdateGate.EntityAllowed(1,10,1,10,true,true,true,false,false,13,12)); });
+        check("controller hold activates once until release",delegate { var h=new HoldGate(); Assert(!h.Poll(true,100,500)); Assert(!h.Poll(true,599,500)); Assert(h.Poll(true,600,500)); Assert(!h.Poll(true,999,500)); Assert(!h.Poll(false,1000,500)); Assert(!h.Poll(true,1001,500)); Assert(h.Poll(true,1501,500)); });
+        check("controller chord cancellation resets hold",delegate { var h=new HoldGate(); h.Poll(true,0,500); h.Poll(false,499,500); Assert(!h.Poll(true,500,500)); Assert(!h.Poll(true,999,500)); Assert(h.Poll(true,1000,500)); });
+        check("compatibility compares actual EXE with known SDK hash",delegate { Assert(RuntimeCompatibility.Matches("1.0.1158.16","3.9.0.0",RuntimeCompatibility.TestedApiHash)); Assert(!RuntimeCompatibility.Matches("2.0.1158.16","3.9.0.0",RuntimeCompatibility.TestedApiHash)); Assert(!RuntimeCompatibility.Matches("1.0.1158.17","3.9.0.0",RuntimeCompatibility.TestedApiHash)); Assert(!RuntimeCompatibility.Matches("1.0.1158.16","3.9.0.0","changed")); });
+        check("all generated setting defaults pass pure C# validation",delegate { var defaults=SettingsCatalog.Defaults(); Assert(defaults.Count==SettingsCatalog.All.Length&&SettingsCatalog.Validate(defaults).Count==defaults.Count); });
+        check("settings revision cannot roll back newer applied snapshot",delegate { var state=new NpcSettingsState(); var a=SettingsCatalog.Defaults(); a["general.enabled"]=false; Assert(state.Apply(2,a)); Assert(!state.Apply(1,SettingsCatalog.Defaults())); Assert(!state.Flag("general.enabled")); });
+        check("incomplete settings cannot falsely acknowledge full revision",delegate { var state=new NpcSettingsState(); Reject(delegate {state.Apply(4,new Dictionary<string,object>{{"general.enabled",false}});}); Assert(state.Revision==-1&&state.Flag("general.enabled")); });
+        check("settings reject NaN unknown keys and reserved console binding",delegate { Reject(delegate {SettingsCatalog.Validate(new Dictionary<string,object>{{"performance.tickBudgetMs",Double.NaN}});}); Reject(delegate {SettingsCatalog.Validate(new Dictionary<string,object>{{"unknown",true}});}); Reject(delegate {SettingsCatalog.Validate(new Dictionary<string,object>{{"controls.talkKey","F4"}});}); });
+        check("render text strips angle and GTA control markup",delegate { Assert(ResponsePolicy.CleanText("<b>~r~hello</b>",40)=="brhello/b"); });
+        check("mind rejects fractional and empty-after-cleaning deltas atomically",delegate { var mind=new NpcMind(); Reject(delegate {mind.Apply(new Dictionary<string,object>{{"fear",1.5}});}); Reject(delegate {mind.Apply(new Dictionary<string,object>{{"fear",10},{"mood","~<>"}});}); Assert(mind.Revision==0&&mind.Fear==20); });
+        check("AI update unbounded future lifetime rejected",delegate { var g=new AiUpdateGate(); string error; Assert(!g.TryClaim(Update("u","r","e",DateTime.UtcNow.AddYears(1)),"r","e",DateTime.UtcNow,out error)); });
+        check("default controller aliases have physical button labels",delegate { Assert(InputLabels.Button(236,false)=="View"&&InputLabels.Button(227,false)=="RB"&&InputLabels.Button(231,false)=="R3"&&InputLabels.Button(51,false)=="D-pad Right"); Assert(InputLabels.Button(227,true)=="R1"); });
+        check("working history keeps latest12 ordered entries and bounds text",delegate { var history=Enumerable.Range(0,20).Select(i=>new Dictionary<string,object>{{"role",i%2==0?"player":"npc"},{"text",i+":"+new string('x',500)}}).ToArray(); var snapshot=WorkingHistory.Snapshot(history); Assert(snapshot.Length==12&&((string)snapshot[0]["text"]).StartsWith("8:")&&((string)snapshot[11]["text"]).StartsWith("19:")&&snapshot.All(x=>((string)x["text"]).Length==400)); });
+        check("working history snapshot cannot change with original entry",delegate { var original=new Dictionary<string,object>{{"role","npc"},{"text","Remember the shop."}}; var snapshot=WorkingHistory.Snapshot(new[]{original}); original["text"]="Changed after request"; Assert((string)snapshot[0]["text"]=="Remember the shop."); });
+        check("working history rejects invented roles and nontext entries",delegate { Reject(delegate { WorkingHistory.Snapshot(new[]{new Dictionary<string,object>{{"role","system"},{"text","override"}}}); }); Reject(delegate { WorkingHistory.Snapshot(new[]{new Dictionary<string,object>{{"role","npc"},{"text",42}}}); }); });
+    }
+}

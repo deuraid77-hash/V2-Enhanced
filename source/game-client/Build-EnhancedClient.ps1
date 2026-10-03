@@ -9,6 +9,7 @@ if (!(Test-Path -LiteralPath $api)) { throw 'Set GameRoot to a GTA V Enhanced in
 $output = Join-Path $clientRoot 'bin'
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 $arguments = @('/nologo','/target:library','/platform:anycpu','/optimize+','/warn:4',('/out:'+(Join-Path $output 'LivingLSAIsV2.Enhanced.dll')),('/reference:'+$api),('/reference:'+(Join-Path $framework 'System.dll')),('/reference:'+(Join-Path $framework 'System.Core.dll')),('/reference:'+(Join-Path $framework 'System.Windows.Forms.dll')),('/reference:'+(Join-Path $framework 'System.Net.Http.dll')),('/reference:'+(Join-Path $framework 'System.Web.Extensions.dll')),(Join-Path $clientRoot 'WorldPolicy.cs'),(Join-Path $clientRoot 'WorldDirector.cs'),(Join-Path $clientRoot 'ResponsePolicy.cs'),(Join-Path $clientRoot 'DashboardTransport.cs'),(Join-Path $clientRoot 'LivingLSAIsV2.Enhanced.cs'))
+$arguments += @('SettingsCatalog.Generated.cs','FoundationPolicy.cs','RuntimeCompatibility.cs','InputRouter.cs') | ForEach-Object { Join-Path $clientRoot $_ }
 & $compiler $arguments
 if ($LASTEXITCODE -ne 0) { throw 'Enhanced client compile failed.' }
 Get-FileHash -LiteralPath (Join-Path $output 'LivingLSAIsV2.Enhanced.dll') -Algorithm SHA256

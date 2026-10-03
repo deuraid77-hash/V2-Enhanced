@@ -12,15 +12,35 @@ using GTA;
 using GTA.Math;
 using GTA.Native;
 using Screen=GTA.UI.Screen;
-[assembly: System.Reflection.AssemblyTitle("Living Los Santos 3 Enhanced World Director")]
-[assembly: System.Reflection.AssemblyVersion("3.0.1.0")]
+[assembly: System.Reflection.AssemblyTitle("Living Los Santos 4 Enhanced NPC Foundation")]
+[assembly: System.Reflection.AssemblyVersion("4.0.0.0")]
 [assembly: System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.8")]
 namespace LivingLosSantosV2
 {
     public sealed class EnhancedClient : Script
     {
-        private const string PluginVersion="3.0.1-enhanced";
-        private readonly string runtimeId="lls3-"+Guid.NewGuid().ToString("N");
+        private const string PluginVersion="4.0.0-foundation-enhanced";
+        private readonly string runtimeId="lls4-"+Guid.NewGuid().ToString("N");
+        private string sceneEpoch=Guid.NewGuid().ToString("N"), registeredEpoch;
+        private readonly NpcSettingsState npcSettings=new NpcSettingsState();
+        private readonly InputRouter input=new InputRouter();
+        private readonly AiUpdateGate updateGate=new AiUpdateGate();
+        private readonly HashSet<string> executedActions=new HashSet<string>();
+        private readonly TickMetrics metrics=new TickMetrics();
+        private RuntimeCompatibility compatibility;
+        private readonly List<string> aiReceipts=new List<string>();
+        private readonly List<Dictionary<string,object>> aiOutcomes=new List<Dictionary<string,object>>();
+        private readonly Dictionary<string,int> factionStandings=new Dictionary<string,int>(),districtStandings=new Dictionary<string,int>();
+        private ActiveJob conversation;
+        private int sentFrame,acceptedFrame;
+        private readonly List<WeaponLease> weaponLeases=new List<WeaponLease>();
+        private string lastHardPause;
+        private int lastPlayerHandle;
+        private bool panic;
+        private DateTime nextHint=DateTime.MinValue,hintUntil=DateTime.MinValue,keyboardReleasedUntil=DateTime.MinValue, recentGunfire=DateTime.MinValue, nextScan=DateTime.MinValue;
+        private readonly List<Dictionary<string,object>> observedNpcs=new List<Dictionary<string,object>>();
+        private readonly Queue<Ped> scanCandidates=new Queue<Ped>();
+        private DateTime lastScanStarted=DateTime.MinValue;
         private readonly DashboardTransport transport=new DashboardTransport("http://127.0.0.1:3000/");
         private readonly CancellationTokenSource cancellation=new CancellationTokenSource();
         private readonly ConcurrentQueue<Completion> completed=new ConcurrentQueue<Completion>();
@@ -41,50 +61,66 @@ namespace LivingLosSantosV2
         private readonly object saveLock=new object();
         private string latestCampaign;
         private bool saveRunning;
-        private sealed class NpcMemory { public Ped Ped; public int Model; public DateTime LastUsed; public readonly List<Dictionary<string,object>> History=new List<Dictionary<string,object>>(); public string Note=""; }
+        private sealed class NpcMemory { public Ped Ped; public int Model,LastHealth; public DateTime LastUsed; public readonly List<Dictionary<string,object>> History=new List<Dictionary<string,object>>(); public string Note=""; public readonly NpcMind Mind=new NpcMind(); }
         private sealed class SeenNpc { public Ped Ped; public int Handle,Model; public DateTime At; }
+        private sealed class ActiveJob { public Ped Ped; public int Handle,Model,RequiredFrame,Attempts; public string RequestId=Guid.NewGuid().ToString(),JobId,Epoch,NpcId,Utterance; public Dictionary<string,object>[] History; public DateTime Deadline,NextSubmit; public bool Submitted; }
+        private sealed class WeaponLease { public Ped Ped; public int Handle,Model; public WeaponHash Original; public DateTime Until; }
         private sealed class Completion
-        { public bool Dialogue; public Ped Ped; public int Handle,Model; public string Error,Utterance; public string[] EventIds,AckIds; public Dictionary<string,object> Response; }
+        { public bool Job; public int Frame; public string Error,Epoch,RequestId; public string[] EventIds,AckIds,ReceiptIds,OutcomeIds; public Dictionary<string,object> Response; }
         public EnhancedClient()
         {
             if(!String.Equals(System.Diagnostics.Process.GetCurrentProcess().ProcessName,"GTA5_Enhanced",StringComparison.OrdinalIgnoreCase)) { stopping=true; transport.Dispose(); return; }
+            string executable=System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
+            compatibility=RuntimeCompatibility.Inspect(executable,Path.Combine(Path.GetDirectoryName(executable),"ScriptHookVDotNet3.dll"));
             director=new WorldDirector(Emit,Acknowledge,SaveCampaign);
             campaign=new CampaignStore(Path.Combine(dataDirectory,"campaign-v3.json"));
             try { director.Settings=campaign.Load(director.Territories); }
             catch(Exception ex) { Log("Campaign restore rejected: "+ex.GetType().Name); try { Log("Rejected campaign preserved at "+campaign.PreserveRejected()); } catch { campaign=null; Log("Unable to preserve rejected campaign; campaign writes disabled this session."); } Emit("campaign_warning","Campaign restore rejected; original data preserved. Defaults are active.",null,null); }
             Tick+=OnTick; KeyDown+=OnKeyDown; Aborted+=OnAborted;
-            Log("Client "+PluginVersion+" started; protocol3; 15 second readiness grace.");
+            Log("Client "+PluginVersion+" started; protocol4; EXE "+compatibility.GameFileVersion+"; SDK "+compatibility.ApiVersion+"; tested="+compatibility.Supported+"; 15 second readiness grace.");
         }
         private void OnKeyDown(object sender,KeyEventArgs args)
         {
-            if(stopping||!storyModeReady) return;
-            if(args.KeyCode==Keys.F7&&!dialoguePending&&keyboardTarget==null) promptRequested=true;
-            if(args.KeyCode==Keys.F8) toggleRequested=true;
+            if(!stopping) input.Queue(args.KeyCode);
         }
         private void OnTick(object sender,EventArgs args)
         {
             if(stopping) return;
+            metrics.Begin();
             try
             {
                 // All native functions and GTA entity access execute on the script Tick thread.
                 if(Function.Call<bool>(Hash.NETWORK_IS_GAME_IN_PROGRESS)||Function.Call<bool>(Hash.NETWORK_IS_SESSION_ACTIVE)) { Log("Online session detected; disposing Story Mode director."); OnAborted(this,EventArgs.Empty); return; }
                 DateTime now=DateTime.UtcNow;
                 Ped player=Game.Player.Character;
-                string pause=WorldDirector.ScenePause(player,director.Settings);
-                if(keyboardTarget!=null&&pause=="Player control unavailable") pause="Dialogue keyboard open";
-                if(now<readyAt) pause="Starting director: waiting for Story Mode to settle";
+                string pause=EffectivePause(player);
                 storyModeReady=pause==null;
+                UpdateScene(player,pause);
+                foreach(string action in input.Poll(npcSettings,keyboardTarget!=null,storyModeReady)) {
+                    if(action=="panic") { panic=true; pause="Panic stop active; restart the script to resume"; storyModeReady=false; UpdateScene(player,pause); CancelConversation("Panic stop"); CancelKeyboard(); director.Clear("Panic stop"); promptRequested=false; toggleRequested=false; Caption("Panic stop: owned scenarios and AI cancelled.",5000); break; }
+                    else if(action=="talk"&&!dialoguePending&&keyboardTarget==null) promptRequested=true;
+                    else if(action=="director") toggleRequested=true;
+                    else if(action=="menu"||action=="wheel") Caption("NPC foundation: full menu and reply wheel arrive in the next verified stage. "+input.TalkPrompt(npcSettings),3500);
+                }
                 if(toggleRequested) { toggleRequested=false; if(storyModeReady) { director.Toggle(); Caption("Street director "+(director.Settings.enabled?"ON":"OFF"),2500); } }
                 PollKeyboard(player);
                 DrainCompleted(player,pause);
+                pause=EffectivePause(player); storyModeReady=pause==null; UpdateScene(player,pause);
+                CheckConversation(player,pause);
+                RestoreWeapons(pause!=null);
+                var directorTimer=System.Diagnostics.Stopwatch.StartNew();
                 director.Tick(player,pause);
+                directorTimer.Stop(); metrics.DirectorMs=directorTimer.Elapsed.TotalMilliseconds; metrics.GameFrameMs=Game.LastFrameTime*1000;
                 if(storyModeReady&&promptRequested)
                 {
                     promptRequested=false;
-                    Ped target=World.GetNearbyPeds(player,5).Where(p=>Interactable(p,player,5)).OrderBy(p=>p.Position.DistanceToSquared(player.Position)).FirstOrDefault();
-                    if(target==null) Caption("Stand within 5 metres of a pedestrian on foot.",3000);
+                    float range=(float)npcSettings.Number("conversation.rangeMeters");
+                    Ped target=World.GetNearbyPeds(player,range).Where(p=>Interactable(p,player,range)).OrderBy(p=>p.Position.DistanceToSquared(player.Position)).FirstOrDefault();
+                    if(target==null) Caption("Stand within "+range+" metres of an available pedestrian on foot.",3000);
                     else { keyboardTarget=new SeenNpc{Ped=target,Handle=target.Handle,Model=target.Model.Hash,At=now}; Function.Call(Hash.DISPLAY_ONSCREEN_KEYBOARD,0,"FMMC_KEY_TIP8","","","","","",240); }
                 }
+                if(storyModeReady&&npcSettings.Flag("general.hints")) { if(now>=nextHint) { nextHint=now.AddSeconds(10); hintUntil=now.AddSeconds(2); } if(now<hintUntil) Screen.ShowHelpTextThisFrame("Living Los Santos: "+input.TalkPrompt(npcSettings)); }
+                if((scanCandidates.Count>0||now>=nextScan)&&metrics.HasBudget(npcSettings.Number("performance.tickBudgetMs"))) Scan(player); else if(scanCandidates.Count>0||now>=nextScan) metrics.Deferred++;
                 if(!exchangePending&&now>=nextExchange) { nextExchange=now.AddSeconds(1); Exchange(player); }
             }
             catch(Exception ex)
@@ -93,58 +129,156 @@ namespace LivingLosSantosV2
                 if(DateTime.UtcNow>=nextErrorLog) { nextErrorLog=DateTime.UtcNow.AddSeconds(10); Log("Tick failure "+ex.GetType().Name+" at "+(ex.TargetSite==null?"unknown":ex.TargetSite.DeclaringType.FullName+"."+ex.TargetSite.Name)); Emit("runtime_error","A director operation failed. See the local diagnostic log.",null,null); }
                 try { director.Clear("Encounter cancelled after runtime error"); } catch { Log("Cleanup requires script abort or game exit."); }
             }
+            finally { metrics.End(); }
         }
         private bool Interactable(Ped ped,Ped player,float range)
         { return WorldDirector.Alive(player)&&WorldDirector.Alive(ped)&&ped.Handle!=player.Handle&&ped.IsHuman&&(!ped.IsPersistent||director.IsOwned(ped))&&!ped.IsInVehicle()&&!ped.IsInCombat&&ped.Position.DistanceTo(player.Position)<=range; }
         private string NpcId(Ped ped) { return runtimeId+":"+ped.Handle+":"+ped.Model.Hash; }
+        private string EffectivePause(Ped player)
+        {
+            if(!compatibility.Supported) return compatibility.Reason;
+            if(npcSettings.Flag("general.safeMode")) return "Safe mode active";
+            if(panic) return "Panic stop active; restart the script to resume";
+            if(!npcSettings.Flag("general.enabled")) return "NPC overhaul disabled";
+            if(DateTime.UtcNow<readyAt) return "Starting director: waiting for Story Mode to settle";
+            if(npcSettings.Flag("safety.protectMissions")&&Game.IsMissionActive) return "Story mission protected";
+            string pause=WorldDirector.ScenePause(player,director.Settings);
+            return (keyboardTarget!=null||DateTime.UtcNow<keyboardReleasedUntil)&&pause=="Player control unavailable"?"Dialogue keyboard open":pause;
+        }
         private void StartDialogue(Ped target,Ped player,string utterance,string command)
         {
             if(dialoguePending) { if(command!=null) Acknowledge(command,false,"Another dialogue request is pending."); return; }
             NpcMemory memory=Memory(target,true);
-            var packet=new Dictionary<string,object>{{"npc",Describe(target)},{"player",DescribePlayer(player)},{"environment",DescribeEnvironment(player)},{"playerUtterance",utterance},{"history",memory.History.ToArray()}};
+            conversation=new ActiveJob{Ped=target,Handle=target.Handle,Model=target.Model.Hash,Epoch=sceneEpoch,NpcId=NpcId(target),Utterance=utterance,History=WorkingHistory.Snapshot(memory.History),Deadline=DateTime.UtcNow.AddSeconds(npcSettings.Number("conversation.timeoutSeconds")),RequiredFrame=sentFrame+1};
             dialoguePending=true;
-            Send("api/dialogue",serializer.Serialize(packet),new Completion {Dialogue=true,Ped=target,Handle=target.Handle,Model=target.Model.Hash,Utterance=utterance});
-            if(command!=null) Acknowledge(command,true,"Dialogue dispatched. The result will appear as a world event.");
+            Observe(target); nextExchange=DateTime.MinValue;
+            if(command!=null) Acknowledge(command,true,"Dialogue queued against the observed NPC. The result will appear as a world event.");
             Caption("Waiting for the NPC reply...",1800);
         }
+        private void UpdateScene(Ped player,string pause)
+        {
+            bool hard=pause!=null&&pause!="Game paused"&&pause!="Dialogue keyboard open";
+            int handle=player!=null&&player.Exists()?player.Handle:0;
+            if((hard&&lastHardPause!=pause)||(lastPlayerHandle!=0&&handle!=lastPlayerHandle)) {
+                sceneEpoch=Guid.NewGuid().ToString("N"); registeredEpoch=null; CancelConversation("Scene changed"); CancelKeyboard(); observedNpcs.Clear(); scanCandidates.Clear(); seen.Clear(); nextScan=DateTime.MinValue;
+            }
+            lastHardPause=hard?pause:null; lastPlayerHandle=handle;
+        }
+        private void CheckConversation(Ped player,string pause)
+        {
+            if(conversation==null) return;
+            if(conversation.Epoch!=sceneEpoch||DateTime.UtcNow>=conversation.Deadline||pause!=null&&pause!="Dialogue keyboard open"||!ValidJobTarget(conversation,player)) { CancelConversation("Conversation cancelled because the scene or NPC changed."); return; }
+            if(!conversation.Submitted&&registeredEpoch==sceneEpoch&&acceptedFrame>=conversation.RequiredFrame&&DateTime.UtcNow>=conversation.NextSubmit) {
+                conversation.Submitted=true;
+                conversation.Attempts++;
+                var packet=new {requestId=conversation.RequestId,runtimeId=runtimeId,sceneEpoch=sceneEpoch,kind="conversation",lane="A",npcIds=new[]{conversation.NpcId},context=new{playerUtterance=conversation.Utterance,trigger="player_talk",history=conversation.History}};
+                Send("api/ai/jobs",serializer.Serialize(packet),new Completion{Job=true,Epoch=sceneEpoch,RequestId=conversation.RequestId});
+            }
+        }
+        private bool ValidJobTarget(ActiveJob job,Ped player)
+        { return WorldDirector.Alive(player)&&job.Ped!=null&&job.Ped.Exists()&&AiUpdateGate.EntityAllowed(job.Handle,job.Model,job.Ped.Handle,job.Ped.Model.Hash,true,job.Ped.IsAlive,job.Ped.IsHuman,job.Ped.IsPersistent&&!director.IsOwned(job.Ped),job.Ped.IsInVehicle(),job.Ped.Position.DistanceTo(player.Position),npcSettings.Number("conversation.walkAwayMeters"))&&(!npcSettings.Flag("conversation.interruptOnDanger")||!job.Ped.IsInCombat&&!player.IsInCombat); }
+        private void CancelConversation(string reason)
+        {
+            ActiveJob job=conversation; conversation=null; dialoguePending=false; promptRequested=false;
+            if(job==null) return;
+            if(job.JobId!=null) CancelRemote(job.JobId);
+            Emit("dialogue_cancelled",reason,null,null);
+        }
+        private void CancelRemote(string id)
+        { Task.Run(async delegate { try { await transport.CancelJobAsync(id,cancellation.Token).ConfigureAwait(false); } catch { } }); }
         private void DrainCompleted(Ped player,string pause)
         {
-            Completion item;
-            while(completed.TryDequeue(out item))
+            Completion item; int count=0;
+            while(count++<8&&completed.TryDequeue(out item))
             {
-                if(item.Dialogue)
+                if(item.Job)
                 {
-                    dialoguePending=false;
-                    if(item.Error!=null) { Emit("dialogue_failed",item.Error,null,null); Caption(item.Error,3500); continue; }
-                    Ped target=item.Ped;
-                    if(pause!=null||!WorldDirector.Alive(player)||target==null||!target.Exists()||target.Handle!=item.Handle||target.Model.Hash!=item.Model||!Interactable(target,player,12)) { Emit("dialogue_discarded","The pedestrian moved away or changed state before replying.",null,null); continue; }
                     try
                     {
-                        var response=ResponsePolicy.ParseResult(item.Response); object rawAction; response.TryGetValue("action",out rawAction);
-                        string note=ApplyDialogueAction(target,player,ResponsePolicy.Action(rawAction)), speech=ResponsePolicy.CleanText(response["speech"],420);
-                        NpcMemory memory=Memory(target,true);
-                        memory.History.Add(new Dictionary<string,object>{{"role","player"},{"text",item.Utterance}}); memory.History.Add(new Dictionary<string,object>{{"role","npc"},{"text",speech}});
-                        while(memory.History.Count>12) memory.History.RemoveAt(0);
-                        object memoryNote; if(response.TryGetValue("memoryNote",out memoryNote)) memory.Note=ResponsePolicy.CleanText(memoryNote,400);
-                        Caption("NPC ["+ResponsePolicy.SourceLabel(item.Response)+"]: "+speech+(note.Length==0?"":" ["+note+"]"),10000);
-                        Emit("dialogue","NPC "+target.Handle+" ["+ResponsePolicy.SourceLabel(item.Response)+"]: "+speech,null,director.Faction(target));
+                        if(item.Error!=null) throw new InvalidOperationException(item.Error);
+                        string jobId=Wire.Text(Wire.Map(Wire.Value(item.Response,"job")),"id",128);
+                        if(conversation==null||conversation.RequestId!=item.RequestId||sceneEpoch!=item.Epoch) { CancelRemote(jobId); continue; }
+                        conversation.JobId=jobId;
+                        string status=Wire.Text(Wire.Map(Wire.Value(item.Response,"job")),"status",32);
+                        if(status=="cancelled"||status=="rejected"||status=="failed") CancelConversation("AI job no longer available: "+status);
                     }
-                    catch(InvalidOperationException) { Emit("dialogue_failed","The local director returned an invalid dialogue result.",null,null); }
+                    catch(InvalidOperationException ex) { if(conversation!=null&&conversation.RequestId==item.RequestId) { if(conversation.Attempts<2&&item.Error!=null&&!item.Error.StartsWith("Dashboard HTTP 4",StringComparison.Ordinal)) { conversation.Submitted=false; conversation.NextSubmit=DateTime.UtcNow.AddSeconds(1); } else { CancelConversation(ex.Message); Caption(ex.Message,3500); } } }
                     continue;
                 }
                 exchangePending=false;
                 if(item.Error!=null) { if(DateTime.UtcNow>=nextErrorLog) { nextErrorLog=DateTime.UtcNow.AddSeconds(20); Log(item.Error); } continue; }
                 try
                 {
-                    if(!Wire.Boolean(item.Response,"success")||Wire.Integer(item.Response,"protocol",3,3)!=3) throw new InvalidOperationException("Protocol mismatch.");
+                    if(!Wire.Boolean(item.Response,"success")||Wire.Integer(item.Response,"protocol",4,4)!=4) throw new InvalidOperationException("Companion protocol4 required; update the companion before NPC AI is available.");
                     pendingEvents.RemoveAll(e=>item.EventIds.Contains((string)e["id"])); acknowledgements.RemoveAll(e=>item.AckIds.Contains((string)e["id"]));
+                    aiReceipts.RemoveAll(id=>item.ReceiptIds.Contains(id)); aiOutcomes.RemoveAll(a=>item.OutcomeIds.Contains((string)a["actionId"]));
+                    if(item.Epoch==sceneEpoch) { registeredEpoch=sceneEpoch; acceptedFrame=Math.Max(acceptedFrame,item.Frame); }
                     var config=Wire.Map(Wire.Value(item.Response,"config")); int revision=Wire.Integer(config,"revision",0,Int32.MaxValue);
                     if(revision!=appliedRevision)
                     { DirectorSettings settings=DirectorSettings.Parse(Wire.Map(Wire.Value(config,"settings"))); director.Apply(settings); appliedRevision=revision; Emit("settings_applied","Director settings revision "+revision+" applied in game.",null,null); }
+                    var npcConfig=Wire.Map(Wire.Value(item.Response,"npcSettings"));
+                    npcSettings.Apply(Wire.Integer(npcConfig,"revision",0,Int32.MaxValue),Wire.Map(Wire.Value(npcConfig,"settings")));
+                    pause=EffectivePause(player); UpdateScene(player,pause);
+                    foreach(var update in Wire.Maps(Wire.Value(item.Response,"aiUpdates")).Take(32)) ConsumeAi(update,player,pause);
                     foreach(var command in Wire.Maps(Wire.Value(item.Response,"commands")).Take(32)) Dispatch(command,player,pause);
                 }
-                catch(Exception ex) { Log("Exchange response rejected: "+ex.GetType().Name); }
+                catch(Exception ex) { Log("Exchange response rejected: "+ex.GetType().Name+(ex is InvalidOperationException?" "+ResponsePolicy.CleanText(ex.Message,240):"")); }
             }
+        }
+        private void ConsumeAi(Dictionary<string,object> update,Ped player,string pause)
+        {
+            string id=null;
+            try {
+                // A fast provider can finish before its POST response reaches the game thread.
+                // Leave that update unreceipted so the companion redelivers after the job ID is known.
+                if(conversation!=null&&conversation.JobId==null) return;
+                id=Wire.Text(update,"id",128); string error;
+                if(!updateGate.TryClaim(update,runtimeId,sceneEpoch,DateTime.UtcNow,out error)) return;
+                string jobId=Wire.Text(update,"jobId",128),kind=Wire.Text(update,"kind",32),status=Wire.Text(update,"status",32),source=Wire.Text(update,"source",80);
+                if(conversation==null||conversation.JobId!=jobId||!ValidJobTarget(conversation,player)||pause!=null) return;
+                var payload=Wire.Map(Wire.Value(update,"payload"));
+                if(kind=="speech") { Caption("NPC ["+ResponsePolicy.CleanText(source,40)+"]: "+ResponsePolicy.CleanText(Wire.Text(payload,"speech",800),800),6000); return; }
+                if(status=="failed"||status=="cancelled"||status=="rejected") { CancelConversation("AI job "+status+"."); return; }
+                if(kind!="conversation"||(status!="completed"&&status!="fallback")) return;
+                string speech=ResponsePolicy.CleanText(Wire.Text(payload,"speech",800),800);
+                if(speech.Length==0) throw new InvalidOperationException("NPC speech is empty after sanitization.");
+                NpcMemory memory=Memory(conversation.Ped,true);
+                var delta=Wire.Map(Wire.Value(payload,"mindDelta"));
+                // Validate all final-state fields before applying any mental changes or GTA action.
+                var candidate=new NpcMind{Fear=memory.Mind.Fear,Aggression=memory.Mind.Aggression,Morale=memory.Mind.Morale,Trust=memory.Mind.Trust,Respect=memory.Mind.Respect,Mood=memory.Mind.Mood}; candidate.Apply(delta);
+                int factionDelta=NpcMind.Delta(delta,"factionRepDelta",20), districtDelta=NpcMind.Delta(delta,"districtRepDelta",20);
+                var actions=Wire.Maps(Wire.Value(payload,"actions")).Take(9).ToArray(); if(actions.Length>8) throw new InvalidOperationException("Too many AI actions.");
+                var notes=Wire.Maps(Wire.Value(payload,"memoryEvents")).Take(4).ToArray(); if(notes.Length>3) throw new InvalidOperationException("Too many memory events.");
+                foreach(var note in notes) { Wire.Text(note,"type",40); Wire.Text(note,"text",160); }
+                string tone=Wire.Text(payload,"voiceTone",80);
+                memory.Mind.Apply(delta); memory.Mind.VoiceTone=ResponsePolicy.CleanText(tone,80);
+                if(npcSettings.Flag("reputation.enabled")) { AddReputation(factionStandings,director.Faction(conversation.Ped),factionDelta); AddReputation(districtStandings,World.GetZoneLocalizedName(player.Position),districtDelta); }
+                foreach(var note in notes) memory.Note=ResponsePolicy.CleanText(note["text"],160);
+                memory.History.Add(new Dictionary<string,object>{{"role","player"},{"text",conversation.Utterance}}); memory.History.Add(new Dictionary<string,object>{{"role","npc"},{"text",speech}}); while(memory.History.Count>24) memory.History.RemoveAt(0);
+                foreach(var action in actions) ExecuteAiAction(action,jobId,conversation,player);
+                Caption("NPC ["+ResponsePolicy.CleanText(source,40)+"]: "+speech,10000); Emit("dialogue","NPC "+conversation.Handle+" ["+ResponsePolicy.CleanText(source,40)+"]: "+speech,null,director.Faction(conversation.Ped));
+                conversation=null; dialoguePending=false;
+            } catch(InvalidOperationException ex) { Log("AI update rejected: "+ex.Message); CancelConversation("AI result rejected by local validation."); }
+            finally { if(id!=null&&!aiReceipts.Contains(id)) { if(aiReceipts.Count>=256) aiReceipts.RemoveAt(0); aiReceipts.Add(id); } }
+        }
+        private static void AddReputation(Dictionary<string,int> reputation,string key,int delta)
+        { int value; reputation.TryGetValue(key,out value); reputation[key]=NpcMind.Clamp(value+delta,-100,100); }
+        private void ExecuteAiAction(Dictionary<string,object> action,string jobId,ActiveJob job,Ped player)
+        {
+            string id=null; bool applied=false; string message="Action rejected.";
+            try {
+                id=Wire.Text(action,"actionId",128);
+                if(executedActions.Contains(id)) return;
+                if(Wire.Text(action,"jobId",128)!=jobId||Wire.Text(action,"runtimeId",128)!=runtimeId||Wire.Text(action,"sceneEpoch",128)!=sceneEpoch||Wire.Text(action,"npcId",128)!=job.NpcId||Wire.Timestamp(action,"expiresAt")<=DateTime.UtcNow||Wire.Integer(action,"expectedHandle",1,Int32.MaxValue)!=job.Handle||Wire.Integer(action,"expectedModelHash",Int32.MinValue,Int32.MaxValue)!=job.Model||!ValidJobTarget(job,player)) throw new InvalidOperationException("Action identity, expiry or entity state changed.");
+                string type=Wire.Text(action,"type",40);
+                if(!ResponsePolicy.IsSupportedAction(type)) throw new InvalidOperationException("Action executor not enabled in this foundation build.");
+                if(!npcSettings.Flag("action."+type)) throw new InvalidOperationException("Action disabled by settings.");
+                if(executedActions.Count>=2048) throw new InvalidOperationException("Session action ledger full; reload the script to start a new session.");
+                executedActions.Add(id);
+                var parameters=Wire.Map(Wire.Value(action,"parameters")); int duration=parameters.ContainsKey("durationMs")?Wire.Integer(parameters,"durationMs",500,15000):5000;
+                message=ApplyDialogueAction(job.Ped,player,type,duration); applied=message.Length==0; if(applied) message="Game task accepted; completion is not implied.";
+            } catch(Exception ex) { message=ex is InvalidOperationException?ex.Message:"Game task failed: "+ex.GetType().Name; }
+            if(id!=null) { if(aiOutcomes.Count>=128) aiOutcomes.RemoveAt(0); aiOutcomes.Add(new Dictionary<string,object>{{"actionId",id},{"jobId",jobId},{"status",applied?"applied":"rejected"},{"message",ResponsePolicy.CleanText(message,240)}}); }
         }
         private void Dispatch(Dictionary<string,object> command,Ped player,string pause)
         {
@@ -169,29 +303,50 @@ namespace LivingLosSantosV2
                 if(type=="talk")
                 {
                     string npcId=Wire.Text(payload,"npcId",128), text=ResponsePolicy.CleanText(Wire.Text(payload,"text",240),240); SeenNpc target;
-                    if(!seen.TryGetValue(npcId,out target)||DateTime.UtcNow-target.At>TimeSpan.FromSeconds(5)||!target.Ped.Exists()||target.Ped.Handle!=target.Handle||target.Ped.Model.Hash!=target.Model||!target.Ped.IsOnScreen||!Interactable(target.Ped,player,12)) { Acknowledge(id,false,"NPC is no longer visible, nearby, or available for conversation."); return; }
+                    if(!seen.TryGetValue(npcId,out target)||DateTime.UtcNow-target.At>TimeSpan.FromSeconds(5)||!target.Ped.Exists()||target.Ped.Handle!=target.Handle||target.Ped.Model.Hash!=target.Model||!target.Ped.IsOnScreen||!Interactable(target.Ped,player,(float)npcSettings.Number("conversation.rangeMeters"))) { Acknowledge(id,false,"NPC is no longer visible, within the configured conversation range, or available."); return; }
                     StartDialogue(target.Ped,player,text,id); return;
                 }
                 Acknowledge(id,false,"Unsupported game command.");
             }
             catch(Exception ex) { if(id!=null) Acknowledge(id,false,ex is InvalidOperationException?ex.Message:"Game command could not be applied."); Log("Command rejected: "+ex.GetType().Name); }
         }
-        private void Exchange(Ped player)
+        private void Scan(Ped player)
         {
             DateTime now=DateTime.UtcNow;
-            foreach(int handle in memories.Where(m=>!m.Value.Ped.Exists()||m.Value.Ped.Model.Hash!=m.Value.Model||now-m.Value.LastUsed>TimeSpan.FromMinutes(10)).Select(m=>m.Key).ToArray()) memories.Remove(handle);
-            foreach(string id in seen.Where(s=>now-s.Value.At>TimeSpan.FromSeconds(10)).Select(s=>s.Key).ToArray()) seen.Remove(id);
-            var npcs=new List<Dictionary<string,object>>(); bool available=WorldDirector.Alive(player)&&!Function.Call<bool>(Hash.IS_SCREEN_FADED_OUT);
-            if(available)
-            {
+            if(!WorldDirector.Alive(player)||Function.Call<bool>(Hash.IS_SCREEN_FADED_OUT)) { observedNpcs.Clear(); scanCandidates.Clear(); return; }
+            if(scanCandidates.Count==0) {
+                foreach(int handle in memories.Where(m=>now-m.Value.LastUsed>TimeSpan.FromSeconds(npcSettings.Number("memory.workingMemorySeconds"))).Select(m=>m.Key).ToArray()) memories.Remove(handle);
+                foreach(string id in seen.Where(s=>now-s.Value.At>TimeSpan.FromSeconds(5)).Select(s=>s.Key).ToArray()) seen.Remove(id);
+                observedNpcs.RemoveAll(n=>!seen.ContainsKey((string)n["id"]));
                 var nearby=World.GetNearbyPeds(player,75).Where(p=>p.Exists()&&p.IsHuman&&p.Handle!=player.Handle);
-                var all=director.Peds.Where(p=>p.Exists).Select(p=>p.Ped).Concat(nearby).GroupBy(p=>p.Handle).Select(g=>g.First()).OrderBy(p=>p.Position.DistanceToSquared(player.Position)).Take(40);
-                foreach(Ped ped in all) { npcs.Add(Describe(ped)); if(ped.IsAlive&&ped.IsOnScreen) seen[NpcId(ped)]=new SeenNpc{Ped=ped,Handle=ped.Handle,Model=ped.Model.Hash,At=now}; }
+                var all=director.Peds.Where(p=>p.Exists).Select(p=>p.Ped).Concat(nearby).GroupBy(p=>p.Handle).Select(g=>g.First()).OrderBy(p=>conversation!=null&&p.Handle==conversation.Handle?0:1).ThenBy(p=>p.Position.DistanceToSquared(player.Position)).Take(Math.Min(32,(int)npcSettings.Number("performance.trackedNpcCap")));
+                foreach(Ped ped in all) scanCandidates.Enqueue(ped);
+                lastScanStarted=now; nextScan=now.AddSeconds(1/Math.Max(1,npcSettings.Number("performance.scansPerSecond")));
             }
+            if(player.IsShooting) recentGunfire=now;
+            int remaining=4;
+            while(scanCandidates.Count>0&&remaining-->0&&metrics.HasBudget(npcSettings.Number("performance.tickBudgetMs"))) { Ped ped=scanCandidates.Dequeue(); if(ped.Exists()&&ped.IsHuman&&ped.Position.DistanceTo(player.Position)<=100) Observe(ped); }
+            if(now-lastScanStarted>TimeSpan.FromSeconds(2)) { scanCandidates.Clear(); nextScan=now; }
+        }
+        private void Observe(Ped ped)
+        {
+            if(ped.IsShooting) recentGunfire=DateTime.UtcNow;
+            string id=NpcId(ped); observedNpcs.RemoveAll(n=>(string)n["id"]==id);
+            observedNpcs.Insert(0,Describe(ped));
+            while(observedNpcs.Count>Math.Min(32,npcSettings.Number("performance.trackedNpcCap"))) observedNpcs.RemoveAt(observedNpcs.Count-1);
+            seen[id]=new SeenNpc{Ped=ped,Handle=ped.Handle,Model=ped.Model.Hash,At=DateTime.UtcNow};
+        }
+        private void Exchange(Ped player)
+        {
+            bool available=WorldDirector.Alive(player)&&!Function.Call<bool>(Hash.IS_SCREEN_FADED_OUT);
+            var npcs=new List<Dictionary<string,object>>(available?observedNpcs.Where(n=>seen.ContainsKey((string)n["id"])&&DateTime.UtcNow-seen[(string)n["id"]].At<TimeSpan.FromSeconds(3)):Enumerable.Empty<Dictionary<string,object>>());
+            foreach(var npc in npcs) { NpcMemory memory; if(memories.TryGetValue((int)npc["handle"],out memory)) { npc["mind"]=memory.Mind.Snapshot(); npc["fear"]=memory.Mind.Fear; npc["aggression"]=memory.Mind.Aggression; npc["morale"]=memory.Mind.Morale; npc["memory"]=memory.Note; npc["longTermMemory"]=memory.Note; } }
             var events=pendingEvents.Take(50).ToArray(); var acks=acknowledgements.Take(50).ToArray();
-            var packet=new Dictionary<string,object>{{"protocol",3},{"runtimeId",runtimeId},{"pluginVersion",PluginVersion},{"gameVersion",Game.FileVersion.ToString()},
+            var receipts=aiReceipts.Take(64).ToArray(); var outcomes=aiOutcomes.Take(32).ToArray();
+            var packet=new Dictionary<string,object>{{"protocol",4},{"runtimeId",runtimeId},{"sceneEpoch",sceneEpoch},{"pluginVersion",PluginVersion},{"gameVersion",compatibility.GameFileVersion},{"sdkGameVersion",Game.FileVersion.ToString()},
                 {"appliedRevision",Math.Max(0,appliedRevision)},{"player",available?DescribePlayer(player):null},{"environment",available?DescribeEnvironment(player):null},
-                {"npcs",npcs.ToArray()},{"director",director.Snapshot()},{"events",events},{"acknowledgements",acks}};
+                {"npcs",npcs.ToArray()},{"director",director.Snapshot()},{"events",events},{"acknowledgements",acks},{"appliedNpcRevision",Math.Max(0,npcSettings.Revision)},
+                {"aiReceipts",receipts},{"aiOutcomes",outcomes},{"compatibility",compatibility.Snapshot(Game.FileVersion.ToString())},{"tickMetrics",metrics.Snapshot()},{"inputDevice",input.Controller?"controller":"keyboard"}};
             string json=serializer.Serialize(packet);
             // The server's limit is UTF-8 bytes, while JavaScriptSerializer limits characters.
             // Keep unsent acknowledgements/events queued; send a smaller observed NPC subset if required.
@@ -199,25 +354,29 @@ namespace LivingLosSantosV2
             {
                 if(events.Length>0) { events=events.Take(events.Length/2).ToArray(); packet["events"]=events; }
                 else if(acks.Length>0) { acks=acks.Take(acks.Length/2).ToArray(); packet["acknowledgements"]=acks; }
+                else if(outcomes.Length>0) { outcomes=outcomes.Take(outcomes.Length/2).ToArray(); packet["aiOutcomes"]=outcomes; }
+                else if(receipts.Length>0) { receipts=receipts.Take(receipts.Length/2).ToArray(); packet["aiReceipts"]=receipts; }
                 else if(npcs.Count>0) { npcs.RemoveAt(npcs.Count-1); packet["npcs"]=npcs.ToArray(); }
                 else throw new InvalidOperationException("World snapshot exceeded the local exchange budget.");
                 json=serializer.Serialize(packet);
             }
             exchangePending=true;
-            Send("api/runtime/exchange",json,new Completion{EventIds=events.Select(e=>(string)e["id"]).ToArray(),AckIds=acks.Select(e=>(string)e["id"]).ToArray()});
+            Send("api/runtime/exchange",json,new Completion{Frame=++sentFrame,Epoch=sceneEpoch,EventIds=events.Select(e=>(string)e["id"]).ToArray(),AckIds=acks.Select(e=>(string)e["id"]).ToArray(),ReceiptIds=receipts,OutcomeIds=outcomes.Select(a=>(string)a["actionId"]).ToArray()});
         }
         private Dictionary<string,object> Describe(Ped ped)
         {
-            NpcMemory memory=Memory(ped,false); string faction=director.Faction(ped);
-            return new Dictionary<string,object>{{"id",NpcId(ped)},{"name",(faction=="Civilian/Unknown"?"Pedestrian":faction)+" "+ped.Handle},{"faction",faction},{"factionVerified",faction!="Civilian/Unknown"},
+            NpcMemory memory=Memory(ped,true); string faction=director.Faction(ped); int damage=Math.Max(0,memory.LastHealth-ped.Health); memory.LastHealth=ped.Health;
+            return new Dictionary<string,object>{{"id",NpcId(ped)},{"handle",ped.Handle},{"name",(faction=="Civilian/Unknown"?"Pedestrian":faction)+" "+ped.Handle},{"faction",faction},{"factionVerified",faction!="Civilian/Unknown"},
                 {"archetype",faction=="Civilian/Unknown"?"Nearby pedestrian; affiliation unknown":"Observed "+faction+" pedestrian"},{"position",Position(ped.Position)},{"health",ped.Health},{"alive",ped.IsAlive},
-                {"modelHash",ped.Model.Hash},{"inCombat",ped.IsInCombat},{"owned",director.IsOwned(ped)},{"weapon",ped.Weapons.Current.Hash.ToString()},{"memory",memory==null?"":memory.Note}};
+                {"modelHash",ped.Model.Hash},{"inCombat",ped.IsInCombat},{"owned",director.IsOwned(ped)},{"weapon",ped.Weapons.Current==null?"Unarmed":ped.Weapons.Current.Hash.ToString()},{"memory",memory.Note},
+                {"mind",memory.Mind.Snapshot()},{"fear",memory.Mind.Fear},{"aggression",memory.Mind.Aggression},{"morale",memory.Mind.Morale},{"longTermMemory",memory.Note},
+                {"recentDamage",Math.Min(10000,damage)},{"recentEvents",damage>0?new[]{"Observed health loss: "+damage}:new string[0]},{"distance",ped.Position.DistanceTo(Game.Player.Character.Position)}};
         }
         private NpcMemory Memory(Ped ped,bool create)
         {
             NpcMemory memory;
             if(memories.TryGetValue(ped.Handle,out memory)&&memory.Model!=ped.Model.Hash) { memories.Remove(ped.Handle); memory=null; }
-            if(memory==null&&create) { if(memories.Count>=32) memories.Remove(memories.OrderBy(m=>m.Value.LastUsed).First().Key); memory=new NpcMemory{Ped=ped,Model=ped.Model.Hash}; memories[ped.Handle]=memory; }
+            if(memory==null&&create) { if(memories.Count>=Math.Max(32,npcSettings.Number("memory.maxNpcs"))) memories.Remove(memories.OrderBy(m=>m.Value.LastUsed).First().Key); memory=new NpcMemory{Ped=ped,Model=ped.Model.Hash,LastHealth=ped.Health}; memories[ped.Handle]=memory; }
             if(memory!=null&&create) memory.LastUsed=DateTime.UtcNow; return memory;
         }
         private static object Position(Vector3 p) { return new {x=p.X,y=p.Y,z=p.Z}; }
@@ -227,13 +386,15 @@ namespace LivingLosSantosV2
             int state=Function.Call<int>(Hash.UPDATE_ONSCREEN_KEYBOARD);
             if(state==0) return;
             SeenNpc target=keyboardTarget; keyboardTarget=null;
+            keyboardReleasedUntil=DateTime.UtcNow.AddMilliseconds(350);
             if(state!=1) return;
             string text=ResponsePolicy.CleanText(Function.Call<string>(Hash.GET_ONSCREEN_KEYBOARD_RESULT),240);
-            if(text.Length>0&&WorldDirector.Alive(player)&&target.Ped.Exists()&&target.Ped.Handle==target.Handle&&target.Ped.Model.Hash==target.Model&&Interactable(target.Ped,player,12)&&(!director.Settings.protectMissions||!Game.IsMissionActive))
+            if(text.Length>0&&!panic&&compatibility.Supported&&!npcSettings.Flag("general.safeMode")&&npcSettings.Flag("general.enabled")&&WorldDirector.Alive(player)&&target.Ped.Exists()&&target.Ped.Handle==target.Handle&&target.Ped.Model.Hash==target.Model&&Interactable(target.Ped,player,(float)npcSettings.Number("conversation.walkAwayMeters"))&&(!(director.Settings.protectMissions||npcSettings.Flag("safety.protectMissions"))||!Game.IsMissionActive))
                 StartDialogue(target.Ped,player,text,null);
         }
-        private static object DescribePlayer(Ped p) { return new {wantedLevel=Game.Player.Wanted.WantedLevel,weaponDrawn=p.IsArmed(WeaponCheckFlags.IncludeGun),position=Position(p.Position)}; }
-        private static object DescribeEnvironment(Ped p) { return new {weather=World.Weather.ToString(),timeOfDay=GTA.Chrono.GameClock.Hour+":"+GTA.Chrono.GameClock.Minute.ToString("D2"),district=World.GetZoneLocalizedName(p.Position)}; }
+        private void CancelKeyboard() { if(keyboardTarget!=null) { keyboardTarget=null; Function.Call(Hash.CANCEL_ONSCREEN_KEYBOARD); } }
+        private object DescribePlayer(Ped p) { return new {wantedLevel=Game.Player.Wanted.WantedLevel,weaponDrawn=p.IsArmed(WeaponCheckFlags.IncludeGun),weaponDrawnName=p.Weapons.Current==null?"Unarmed":p.Weapons.Current.Hash.ToString(),stance=p.IsShooting?"Shooting":p.IsAiming?"Aiming":p.IsInCombat?"Combat":p.IsInVehicle()?"In vehicle":p.IsSprinting?"Sprinting":p.IsDucking?"Crouching":"Casual",factionStandings=new Dictionary<string,int>(factionStandings),districtStandings=new Dictionary<string,int>(districtStandings),position=Position(p.Position)}; }
+        private object DescribeEnvironment(Ped p) { return new {weather=World.Weather.ToString(),timeOfDay=GTA.Chrono.GameClock.Hour+":"+GTA.Chrono.GameClock.Minute.ToString("D2"),district=World.GetZoneLocalizedName(p.Position),nearbyGunfire=DateTime.UtcNow-recentGunfire<TimeSpan.FromSeconds(4)}; }
         private void Send(string route,string json,Completion completion)
         {
             // Immutable JSON crosses into this worker; all GTA calls remain on Tick.
@@ -255,16 +416,20 @@ namespace LivingLosSantosV2
         private void Acknowledge(string id,bool applied,string message)
         { acknowledgements.RemoveAll(a=>(string)a["id"]==id); if(acknowledgements.Count>=128) acknowledgements.RemoveAt(0); acknowledgements.Add(new Dictionary<string,object>{{"id",id},{"status",applied?"applied":"rejected"},{"message",ResponsePolicy.CleanText(message,240)}}); }
         private void Caption(string message,int duration) { if(director!=null&&director.Settings.subtitles) Screen.ShowSubtitle("LLS: "+message,duration); }
-        private static string ApplyDialogueAction(Ped target,Ped player,string action)
+        private string ApplyDialogueAction(Ped target,Ped player,string action,int duration)
         {
             if(!ResponsePolicy.IsSupportedAction(action)) return "Dialogue suggestion; no game action";
-            if(action=="SURRENDER") target.Task.HandsUp(5000);
-            else if(action=="FLEE_PANICKED") target.Task.FleeFrom(player,35,8000);
-            else if(action=="TAKE_COVER") Function.Call(Hash.TASK_SEEK_COVER_FROM_PED,target.Handle,player.Handle,5000,false);
-            else if(action=="ATTACK_MELEE") { target.Weapons.Select(WeaponHash.Unarmed,true); target.Task.CombatTimed(player,5000,TaskCombatFlags.PreventChangingTarget); }
-            else if(action=="DRAW_WEAPON") { Weapon weapon=target.Weapons.BestWeapon; if(weapon==null||weapon.Hash==WeaponHash.Unarmed) return "No existing weapon to draw"; target.Weapons.Select(weapon); target.Task.AimGunAtEntity(player,3000,false); }
-            else if(action=="INTIMIDATE") target.Task.LookAt(player,2000); else target.Task.TurnTo(player,1500); return "";
+            if(action=="SURRENDER") target.Task.HandsUp(duration);
+            else if(action=="FLEE_PANICKED") target.Task.FleeFrom(player,35,duration);
+            else if(action=="TAKE_COVER") Function.Call(Hash.TASK_SEEK_COVER_FROM_PED,target.Handle,player.Handle,duration,false);
+            else if(action=="ATTACK_MELEE") { RememberWeapon(target,duration); target.Weapons.Select(WeaponHash.Unarmed,true); target.Task.CombatTimed(player,duration,TaskCombatFlags.PreventChangingTarget); }
+            else if(action=="DRAW_WEAPON") { Weapon weapon=target.Weapons.BestWeapon; if(weapon==null||weapon.Hash==WeaponHash.Unarmed) return "No existing weapon to draw"; RememberWeapon(target,duration); target.Weapons.Select(weapon); target.Task.AimGunAtEntity(player,duration,false); }
+            else if(action=="INTIMIDATE") target.Task.LookAt(player,duration); else target.Task.TurnTo(player,Math.Min(3000,duration)); return "";
         }
+        private void RememberWeapon(Ped ped,int duration)
+        { var old=weaponLeases.FirstOrDefault(x=>x.Handle==ped.Handle&&x.Model==ped.Model.Hash); if(old!=null) { old.Until=DateTime.UtcNow.AddMilliseconds(duration); return; } if(weaponLeases.Count>=16) throw new InvalidOperationException("Temporary weapon lease limit reached."); weaponLeases.Add(new WeaponLease{Ped=ped,Handle=ped.Handle,Model=ped.Model.Hash,Original=ped.Weapons.Current==null?WeaponHash.Unarmed:ped.Weapons.Current.Hash,Until=DateTime.UtcNow.AddMilliseconds(duration)}); }
+        private void RestoreWeapons(bool all)
+        { foreach(var lease in weaponLeases.ToArray()) if(all||DateTime.UtcNow>=lease.Until||!lease.Ped.Exists()) { try { if(lease.Ped.Exists()&&lease.Ped.Handle==lease.Handle&&lease.Ped.Model.Hash==lease.Model&&lease.Ped.IsAlive) lease.Ped.Weapons.Select(lease.Original,true); } finally { weaponLeases.Remove(lease); } } }
         private void SaveCampaign()
         {
             if(campaign==null||director==null) return;
@@ -283,6 +448,9 @@ namespace LivingLosSantosV2
         {
             if(stopping) return;
             stopping=true; storyModeReady=false; promptRequested=false;
+            CancelConversation("Script unloading");
+            try { CancelKeyboard(); } catch { }
+            try { RestoreWeapons(true); } catch { Log("A temporary weapon selection could not be restored during abort."); }
             try { director.Dispose(); SaveCampaign(); } catch(Exception ex) { Log("Abort cleanup: "+ex.GetType().Name); }
             cancellation.Cancel(); transport.Dispose(); Completion item; while(completed.TryDequeue(out item)) {}
             memories.Clear(); seen.Clear(); Log("Director stopped.");

@@ -11,7 +11,8 @@ export type Telemetry = { protocol?: number; runtimeId: string; pluginVersion: s
 export type WorldSnapshot = { success: true; connected: boolean; lastSeenAt: string | null; runtimeId: string | null; config: { revision: number; settings: Settings }; appliedRevision: number; telemetry: Telemetry | null; commands: Command[]; events: WorldEvent[] };
 export type Health = { version?: string; geminiConfigured?: boolean; model?: string; bridge?: { reachable?: boolean; port?: number; provider?: string } };
 export async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, headers: { ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...init?.headers }, signal: AbortSignal.timeout(8000) });
+  const deadline = AbortSignal.timeout(8000);
+  const response = await fetch(url, { ...init, headers: { ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...init?.headers }, signal: init?.signal ? AbortSignal.any([init.signal, deadline]) : deadline });
   const body = await response.json().catch(() => null);
   if (!response.ok || body?.success === false) throw new Error(body?.error || `Companion request failed (${response.status}).`);
   if (!body) throw new Error('The companion returned an unreadable response.');

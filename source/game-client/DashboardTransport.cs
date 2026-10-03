@@ -31,14 +31,24 @@ namespace LivingLosSantosV2
 
         public async Task<Dictionary<string, object>> PostAsync(string route, string json, CancellationToken token)
         {
-            if (route != "api/dialogue" && route != "api/runtime/telemetry" && route != "api/runtime/exchange")
+            if (route != "api/dialogue" && route != "api/runtime/telemetry" && route != "api/runtime/exchange" && route != "api/ai/jobs")
                 throw new ArgumentException("Unsupported dashboard route.");
+            return await RequestAsync(HttpMethod.Post,route,json,token).ConfigureAwait(false);
+        }
+        public Task<Dictionary<string,object>> CancelJobAsync(string jobId,CancellationToken token)
+        {
+            Guid parsed;
+            if(!Guid.TryParse(jobId,out parsed)) throw new ArgumentException("Invalid local job identity.");
+            return RequestAsync(HttpMethod.Delete,"api/ai/jobs/"+Uri.EscapeDataString(jobId),null,token);
+        }
+        private async Task<Dictionary<string,object>> RequestAsync(HttpMethod method,string route,string json,CancellationToken token)
+        {
             using (var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(token))
-            using (var request = new HttpRequestMessage(HttpMethod.Post, new Uri(address, route)))
+            using (var request = new HttpRequestMessage(method, new Uri(address, route)))
             {
-                requestCancellation.CancelAfter(route == "api/runtime/exchange" ? TimeSpan.FromSeconds(3) : timeout);
+                requestCancellation.CancelAfter(route == "api/runtime/exchange" || route.StartsWith("api/ai/jobs",StringComparison.Ordinal) ? TimeSpan.FromSeconds(3) : timeout);
                 token = requestCancellation.Token;
-                request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+                if(json!=null) request.Content = new StringContent(json, Encoding.UTF8, "application/json");
                 using (var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false))
                 using (token.Register(delegate { response.Dispose(); }))
                 {
