@@ -1,9 +1,14 @@
 /** Canonical settings metadata. Runtime consumers must use these exact keys.
  * Actions (reset, panic, export, test connection) are not counted as settings.
- * Existing protocol-3 director settings remain authoritative in /api/world/config.
+ * The 14 existing director settings keep their /api/world/config interface and
+ * independent revision; SettingsStore persists both bundles atomically in V4.
  */
 export type SettingValue = boolean | number | string;
 export type NpcSettings = Record<string, SettingValue>;
+// Script button IDs from the official Cfx control reference. Context 51/52
+// remain accepted for existing bindings and share physical D-pad identities.
+export const CONTROLLER_BINDINGS = [51,52,222,223,224,225,226,227,228,229,230,231,232,233,234,235,236] as const;
+export function physicalControllerBinding(value: SettingValue) {return value===51?235:value===52?234:value;}
 export interface SettingDefinition {
   key: string; label: string; group: string; type: 'boolean' | 'number' | 'select' | 'text';
   default: SettingValue; min?: number; max?: number; step?: number; options?: string[];
@@ -228,6 +233,8 @@ export function validateNpcSettings(value: unknown, partial = true): NpcSettings
     else if (spec.type === 'number') {
       if (typeof item !== 'number' || !Number.isFinite(item) || item < spec.min! || item > spec.max!) throw new Error(`Out-of-range setting: ${key}`);
       if ([spec.min,spec.max,spec.step].every(Number.isInteger) && !Number.isInteger(item)) throw new Error(`Integer setting required: ${key}`);
+      if (key.startsWith('controls.controller') && !(CONTROLLER_BINDINGS as readonly number[]).includes(item)) throw new Error('Choose a documented controller button, not an axis or context-only control.');
+      if (key==='controls.menuModifier' && ![226,227,228,229].includes(item)) throw new Error('The menu modifier must be a shoulder button or trigger.');
     } else {
       if (typeof item !== 'string' || !item.trim() || item.length > 128 || /[\u0000-\u001f~<>]/.test(item)) throw new Error(`Invalid text setting: ${key}`);
       if (spec.options && !spec.options.includes(item)) throw new Error(`Unsupported option: ${key}`);

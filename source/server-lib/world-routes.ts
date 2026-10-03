@@ -33,7 +33,12 @@ export function installWorldRoutes(app: express.Express, world: WorldState, onTe
     }
   }
   app.get('/api/world', rateLimit(120, 10_000), (_req, res) => res.json(world.snapshot()));
-  app.patch('/api/world/config', rateLimit(30, 10_000), boundedFrame, (req, res) => respond(res, () => world.configure(req.body)));
+  app.patch('/api/world/config', rateLimit(30, 10_000), boundedFrame, (req, res) => respond(res, () => {
+    const snapshot=world.configure(req.body);
+    // Native settings editors need the saved revision, not the potentially
+    // large event/NPC history carried by the browser's world snapshot.
+    return req.query.compact==='true'?{success:true,config:snapshot.config}:snapshot;
+  }));
   app.post('/api/world/commands', rateLimit(24, 10_000), boundedFrame, (req, res) => respond(res, () => ({ success: true, command: world.enqueue(req.body) })));
   app.post('/api/runtime/exchange', rateLimit(80, 10_000), boundedFrame, (req, res) => respond(res, () => {
     const result = world.exchange(req.body);

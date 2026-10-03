@@ -103,10 +103,12 @@ namespace LivingLosSantosV2
             if(control==47||control==52||control==58||control==174||control==234) return "D-pad Left";
             if(control==27||control==172||control==232) return "D-pad Up";
             if(control==19||control==173||control==233) return "D-pad Down";
-            if(control==176||control==201) return playstation?"Cross":"A";
-            if(control==177||control==202) return playstation?"Circle":"B";
-            if(control==203) return playstation?"Square":"X";
-            if(control==204) return playstation?"Triangle":"Y";
+            if(control==176||control==201||control==223) return playstation?"Cross":"A";
+            if(control==177||control==202||control==225) return playstation?"Circle":"B";
+            if(control==203||control==224) return playstation?"Square":"X";
+            if(control==204||control==222) return playstation?"Triangle":"Y";
+            if(control==228)return playstation?"L2":"LT";
+            if(control==229)return playstation?"R2":"RT";
             return "Game control "+control;
         }
     }

@@ -40,6 +40,9 @@ test('cross-setting consistency rejects invalid input without applying any parti
   {'controls.menuKey':'F7'},
   {'controls.controllerTalk':52},
   {'controls.menuModifier':236},
+  {'controls.controllerPtt':235},
+  {'controls.controllerWheel':219},
+  {'controls.menuModifier':232},
   {'ai.liveMaxOutputTokens':512.5},
  ]) {assert.throws(()=>store.configure(patch,'portal'));assert.equal(store.snapshot().revision,1);}
 });

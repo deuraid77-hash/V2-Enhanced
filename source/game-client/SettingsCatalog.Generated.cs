@@ -11,6 +11,7 @@ public sealed class SettingDefinition {
  public string[] Options;
 }
 public static class SettingsCatalog {
+ public static readonly int[] ControllerBindings=new int[]{51,52,222,223,224,225,226,227,228,229,230,231,232,233,234,235,236};
  public static readonly SettingDefinition[] All = new SettingDefinition[] {
   new SettingDefinition { Key="general.enabled",Label="Enabled",Group="General",Kind="boolean",Default=true,Min=0d,Max=0d,Step=1d,Options=new string[]{},Tooltip="Run the NPC overhaul. Turning off cancels interactions, AI and owned scenarios.",Consumer="game" },
   new SettingDefinition { Key="general.languageIntensity",Label="Language Intensity",Group="General",Kind="select",Default="gta",Min=0d,Max=0d,Step=1d,Options=new string[]{"clean","mature","gta"},Tooltip="AI dialogue language style; identity slurs are excluded in every mode.",Consumer="game" },
@@ -246,6 +247,8 @@ public static class SettingsCatalog {
     double n=Convert.ToDouble(pair.Value,CultureInfo.InvariantCulture);
     bool integral=s.Min==Math.Truncate(s.Min)&&s.Max==Math.Truncate(s.Max)&&s.Step==Math.Truncate(s.Step);
     if(Double.IsNaN(n)||Double.IsInfinity(n)||n<s.Min||n>s.Max||(integral&&n!=Math.Truncate(n)))throw new InvalidOperationException("Out-of-range setting.");
+    if(s.Key.StartsWith("controls.controller")&&Array.IndexOf(ControllerBindings,(int)n)<0)throw new InvalidOperationException("Choose a documented controller button, not an axis.");
+    if(s.Key=="controls.menuModifier"&&(n<226||n>229))throw new InvalidOperationException("Menu modifier must be a shoulder button or trigger.");
    } else {
     var text=pair.Value as string;
     if(String.IsNullOrWhiteSpace(text)||text.Length>128)throw new InvalidOperationException("Invalid text setting.");
@@ -258,6 +261,14 @@ public static class SettingsCatalog {
     }
    }
    output.Add(pair.Key,pair.Value);
+  }
+  if(output.Count==All.Length) {
+   if(Convert.ToDouble(output["ai.liveReservedSlots"])>=Convert.ToDouble(output["ai.maxConcurrent"]))throw new InvalidOperationException("Leave a background AI slot available.");
+   if(Convert.ToDouble(output["conversation.walkAwayMeters"])<Convert.ToDouble(output["conversation.rangeMeters"]))throw new InvalidOperationException("Walk-away range is smaller than start range.");
+   if(Convert.ToDouble(output["audio.referenceDistanceMeters"])>Convert.ToDouble(output["audio.maxDistanceMeters"]))throw new InvalidOperationException("Audio reference exceeds maximum range.");
+   if(Convert.ToDouble(output["bank.refillThreshold"])>Convert.ToDouble(output["bank.maxLinesPerBucket"]))throw new InvalidOperationException("Bank refill exceeds capacity.");
+   var keys=new HashSet<string>();foreach(string key in new[]{"menuKey","talkKey","wheelKey","pttKey","panicKey"})if(!keys.Add(Convert.ToString(output["controls."+key])))throw new InvalidOperationException("Duplicate keyboard binding.");
+   var buttons=new HashSet<int>();foreach(string key in new[]{"controllerMenu","controllerTalk","controllerWheel","controllerPtt","controllerPanic","menuModifier"}) {int button=Convert.ToInt32(output["controls."+key]);if(button==51)button=235;if(button==52)button=234;if(!buttons.Add(button))throw new InvalidOperationException("Duplicate physical controller binding.");}
   }
   return output;
  }

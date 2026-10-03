@@ -1,5 +1,5 @@
 import { AiError, type AiLane, type AiScope, type SettingsGetter, settingNumber } from './ai-types.ts';
-export type ScheduledTask<T = unknown> = { id: string; lane: Exclude<AiLane, 'D'>; priority?: number; scope: AiScope; run: (signal: AbortSignal) => Promise<T> };
+export type ScheduledTask<T = unknown> = { id: string; lane: Exclude<AiLane, 'D'>; priority?: number; scope: AiScope; sceneBound?: boolean; run: (signal: AbortSignal) => Promise<T> };
 type Queued = ScheduledTask & { controller: AbortController; resolve: (value: unknown) => void; reject: (reason: unknown) => void; order: number; timeout: ReturnType<typeof setTimeout> };
 export class AiScheduler {
   private queue: Queued[] = [];
@@ -52,7 +52,7 @@ export class AiScheduler {
   }
   invalidateScope(runtimeId: string, sceneEpoch: string, activeNpcIds: Iterable<string>) {
     const ids = new Set(activeNpcIds);
-    for (const task of [...this.queue, ...this.active.values()]) if (task.scope.runtimeId !== runtimeId || task.scope.sceneEpoch !== sceneEpoch || task.scope.npcIds.some(id => !ids.has(id))) this.cancel(task.id, 'stale_scene');
+    for (const task of [...this.queue, ...this.active.values()]) if (task.sceneBound !== false && (task.scope.runtimeId !== runtimeId || task.scope.sceneEpoch !== sceneEpoch || task.scope.npcIds.some(id => !ids.has(id)))) this.cancel(task.id, 'stale_scene');
   }
   cancelAll(reason = 'shutdown') { for (const task of [...this.queue, ...this.active.values()]) this.cancel(task.id, reason); }
   // Circuit admission happens immediately before upstream HTTP, not enqueue.

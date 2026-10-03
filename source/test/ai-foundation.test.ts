@@ -190,6 +190,15 @@ test('turning AI off cancels pending requests and delivers only a terminal cance
   const config = settings(), provider = new FixtureProvider(); provider.handler = r => new Promise((_resolve, reject) => r.signal.addEventListener('abort', () => reject(r.signal.reason), { once: true }));
   const s = new AiService({ provider, getSettings: () => config }); s.observe(validateAiFrame(frame())); const job = s.enqueue(jobInput()); await new Promise(r => setImmediate(r)); config['ai.enabled'] = false; s.settingsChanged(); assert.equal((await settled(s, job.id)).status, 'cancelled'); assert.ok(s.deliveries().every(d => d.status === 'cancelled' && !d.payload.actions)); assert.throws(() => s.enqueue(jobInput()), /disabled/); s.close();
 });
+test('switching provider offline cancels streamed work while retaining its occupied physical slot', async () => {
+  const config: AiSettings = { ...settings(), 'ai.maxConcurrent': 1, 'ai.liveReservedSlots': 0 }, provider = new FixtureProvider(); let finish!: () => void;
+  provider.handler = request => new Promise(resolve => { request.onText?.('{"speech":"Started speaking. '); finish = () => resolve({ text: JSON.stringify(response()), usage, firstTextMs: 1, durationMs: 10, finishReason: 'completed' }); });
+  const s = new AiService({ provider, getSettings: () => config }); s.observe(validateAiFrame(frame())); const job = s.enqueue(jobInput()); await new Promise(resolve => setImmediate(resolve));
+  assert.ok(s.deliveries().some(d => d.kind === 'speech')); config['ai.provider'] = 'offline'; s.settingsChanged(); assert.equal((await settled(s, job.id)).status, 'cancelled'); assert.equal(s.scheduler.snapshot().running, 1); assert.ok(s.deliveries().every(d => d.status === 'cancelled' && !d.payload.actions));
+  let nextRan = false; const next = s.scheduler.submit({ id: 'waiting-after-offline', lane: 'A', scope, run: async () => { nextRan = true; } }); await new Promise(resolve => setImmediate(resolve)); assert.equal(nextRan, false); finish(); await next;
+  assert.equal(s.job(job.id).status, 'cancelled'); assert.ok(s.deliveries().every(d => d.status === 'cancelled' && !d.payload.actions)); assert.equal(s.scheduler.snapshot().running, 0); s.close();
+});
+
 test('legacy provider call shares ledger, adds output limit, and refuses unpriced tools', async () => {
   let called = 0, captured: any; const fake = { models: { generateContent: async (value: any) => { called++; captured = value; return { text: 'reply', usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10, thoughtsTokenCount: 5, totalTokenCount: 35 } }; } }, interactions: {} };
   const budget = new AiBudget(undefined, settings), scheduler = new AiScheduler(settings), legacy = meteredLegacyClient(fake as any, budget, scheduler, () => scope, settings);

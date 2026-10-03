@@ -1,0 +1,238 @@
+{
+  "classification": "VERIFIED",
+  "stage": 2,
+  "stageName": "Native menu, shared settings and portal",
+  "checkedAt": "2026-10-03T10:27:55.1430320Z",
+  "offlineGate": {
+    "checkedAt": "2026-10-03T10:25:28.5149596Z",
+    "stage": "menu",
+    "classification": "VERIFIED",
+    "checks": [
+      {
+        "name": "settings-generated",
+        "passed": true,
+        "seconds": 0.1252821,
+        "log": "C:\\Users\\username\\Documents\\GTA ChatGPT Integration\\V2-Enhanced\\verification\\npc-overhaul\\menu-20261003-202515\\settings-generated.txt"
+      },
+      {
+        "name": "typecheck",
+        "passed": true,
+        "seconds": 1.1068036,
+        "log": "C:\\Users\\username\\Documents\\GTA ChatGPT Integration\\V2-Enhanced\\verification\\npc-overhaul\\menu-20261003-202515\\typecheck.txt"
+      },
+      {
+        "name": "backend-tests",
+        "passed": true,
+        "seconds": 7.1973016,
+        "log": "C:\\Users\\username\\Documents\\GTA ChatGPT Integration\\V2-Enhanced\\verification\\npc-overhaul\\menu-20261003-202515\\backend-tests.txt"
+      },
+      {
+        "name": "portal-build",
+        "passed": true,
+        "seconds": 1.2472987,
+        "log": "C:\\Users\\username\\Documents\\GTA ChatGPT Integration\\V2-Enhanced\\verification\\npc-overhaul\\menu-20261003-202515\\portal-build.txt"
+      },
+      {
+        "name": "client-build",
+        "passed": true,
+        "seconds": 0.6019633,
+        "log": "C:\\Users\\username\\Documents\\GTA ChatGPT Integration\\V2-Enhanced\\verification\\npc-overhaul\\menu-20261003-202515\\client-build.txt"
+      },
+      {
+        "name": "client-tests",
+        "passed": true,
+        "seconds": 1.6768947,
+        "log": "C:\\Users\\username\\Documents\\GTA ChatGPT Integration\\V2-Enhanced\\verification\\npc-overhaul\\menu-20261003-202515\\client-tests.txt"
+      },
+      {
+        "name": "client-audit",
+        "passed": true,
+        "seconds": 0.7030568,
+        "log": "C:\\Users\\username\\Documents\\GTA ChatGPT Integration\\V2-Enhanced\\verification\\npc-overhaul\\menu-20261003-202515\\client-audit.txt"
+      },
+      {
+        "name": "audio-policy",
+        "passed": true,
+        "seconds": 0.3618729,
+        "log": "C:\\Users\\username\\Documents\\GTA ChatGPT Integration\\V2-Enhanced\\verification\\npc-overhaul\\menu-20261003-202515\\audio-policy.txt"
+      },
+      {
+        "name": "installer-rollback",
+        "passed": true,
+        "seconds": 0.2682242,
+        "log": "C:\\Users\\username\\Documents\\GTA ChatGPT Integration\\V2-Enhanced\\verification\\npc-overhaul\\menu-20261003-202515\\installer-rollback.txt"
+      }
+    ],
+    "passed": true,
+    "gameExecuted": false,
+    "providerCalled": false,
+    "nativeControllerTested": false,
+    "nativeAudioHeard": false,
+    "evidenceDirectory": "C:\\Users\\username\\Documents\\GTA ChatGPT Integration\\V2-Enhanced\\verification\\npc-overhaul\\menu-20261003-202515"
+  },
+  "backendTests": 132,
+  "clientTests": {
+    "Total": 94,
+    "Passed": 94,
+    "Failed": 0
+  },
+  "apiReferences": 135,
+  "resolvedReferences": 135,
+  "nativeNames": 15,
+  "customMemoryOrPInvoke": false,
+  "clientSha256": "B1FBBD87DA35A566C70A1A7A2870E1E0AD264A137B8DEFBCD9265BB8AA565F01",
+  "audioHelperPolicyTests": 18,
+  "installerChecks": 17,
+  "compiledHttpProbe": {
+    "verifiedAt": "2026-10-03T10:26:29.2340498Z",
+    "fixture": true,
+    "realProviderCalls": false,
+    "gameExecuted": false,
+    "settingsParsed": 220,
+    "compactWorldRevision": true,
+    "staleEditPreserved": true,
+    "fullProfileRoundtrip": true,
+    "advisorPreviewUnchanged": true,
+    "advisorAcceptBundle": true,
+    "advisorRejected": true,
+    "worldExplain": true,
+    "diagnosticAnalysis": true,
+    "diagnosticExport": true
+  },
+  "browser": {
+    "status": "VERIFIED",
+    "at": "2026-10-03T10:07:52.8573584Z",
+    "fixture": "scripts/qa-npc-menu.ts;127.0.0.1:3107;in-memory SettingsStore/MenuAiService;fake provider;no keys or paid API",
+    "build": "index-DJO1BgEu.js",
+    "css": "index-B4r5oNtA.css",
+    "typecheck": "passed",
+    "focusedTests": 3,
+    "browser": "Playwright",
+    "tested": [
+      "Profile save, preview, combined apply, rename, export, import under new name, delete",
+      "NPC draft survives tabs and profile apply; changed revision disables save until explicit rebase",
+      "Advisor proposal leaves revisions and settings untouched before acceptance",
+      "Rejected proposal makes no changes",
+      "Accepted proposal changes NPC budget 5 to 3.75 and world gangAggression 75 to82, with both revisions incremented",
+      "Stale proposal after external change disables acceptance",
+      "Cancel pending advisor job yields cancelled without proposal application",
+      "Explain selected NPC controller setting uses actual saved numeric222",
+      "Explain world.gangAggression uses actual saved82;all14worldoptions listed",
+      "Diagnose sanitized data; provider connection fixture completion",
+      "Diagnostic file written under verification/menu-qa-diagnostics,10253bytes",
+      "Controller numeric select persisted integer222",
+      "Current matching runtime ack Received; disconnected matching revision Unconfirmed",
+      "No-op advisor proposal explicitly says no changes and disables Accept",
+      "Offline companion retains 0.65 NPC draft, disables save, propose and accept; accurate restart banner"
+    ],
+    "profileExport": {
+      "npcSettings": 220,
+      "worldSettings": 14
+    },
+    "layouts": [
+      {
+        "width": 1440,
+        "height": 1000,
+        "documentWidth": 1425
+      },
+      {
+        "width": 390,
+        "height": 844,
+        "documentWidth": 375
+      }
+    ],
+    "console": {
+      "finalConnectedErrors": 0,
+      "finalConnectedWarnings": 0,
+      "offlineExpectedNetworkErrors": 25,
+      "offlineJavaScriptExceptions": 0
+    },
+    "screenshots": [
+      "menu-profiles-desktop.png",
+      "menu-profiles-mobile.png",
+      "menu-advisor-desktop.png",
+      "menu-advisor-mobile.png",
+      "menu-offline-draft.png"
+    ],
+    "fixesFoundDuringBrowser": [
+      "Hidden file input inherited full width and caused horizontal overflow; made genuinely hidden",
+      "Missing favicon404 fixed with local inline SVG",
+      "Tab navigation resets scroll to top",
+      "No-op proposal now explicitly explained"
+    ],
+    "cleanup": "Owned fixture PIDs23980and42160 verified and stopped; QA tab closed; live companion and source/dist untouched",
+    "limitations": [
+      "No physical controller or in-game native menu verified by this agent",
+      "Audio, memory, vehicles and bark banks remain labelled deferred for their later gates",
+      "Browser import legacy-missing-world boundary covered by focused parser test and explicit checkbox UI; not provider behavior"
+    ]
+  },
+  "providerSamples": {
+    "status": "VERIFIED",
+    "evaluationOnly": true,
+    "gameActionsExecuted": false,
+    "acceptedSettings": false,
+    "paidRequestCount": 2,
+    "evaluations": [
+      {
+        "kind": "advisor",
+        "status": "completed",
+        "model": "gemini-3.5-flash-lite",
+        "source": "gemini",
+        "reasonCode": null,
+        "firstTextMs": 1758.1209000000001,
+        "durationMs": 3838.9816,
+        "proposalChangeCount": 6,
+        "proposalKeys": [
+          "world.maxSpawnedPeds",
+          "world.civilianPanic",
+          "memory.summaryMaxTokens",
+          "memory.personaRichness",
+          "ai.directorIntervalSeconds",
+          "ai.liveMaxOutputTokens"
+        ],
+        "explanationGroundedInCatalog": false,
+        "settingsUnchanged": true,
+        "estimatedUsd": 0.001307299999999999
+      },
+      {
+        "kind": "explain",
+        "status": "completed",
+        "model": "gemini-3.5-flash-lite",
+        "source": "gemini",
+        "reasonCode": null,
+        "firstTextMs": 1295.1825,
+        "durationMs": 2283.8401999999996,
+        "proposalChangeCount": null,
+        "proposalKeys": null,
+        "explanationGroundedInCatalog": true,
+        "settingsUnchanged": true,
+        "estimatedUsd": 0.0004597000000000004
+      }
+    ],
+    "usageDelta": {
+      "inputTokens": 1615,
+      "outputTokens": 513,
+      "cachedTokens": 0,
+      "thoughtTokens": 0,
+      "totalTokens": 2128
+    },
+    "estimatedUsdDelta": 0.0017669999999999995,
+    "dailyRemainingUsd": 4.9862685,
+    "dayTimezone": "Australia/Sydney",
+    "priceVersion": "google-standard-usd-2026-10-03",
+    "measuredAt": "2026-10-03T09:58:26.02Z",
+    "modelSource": "authenticated models.list"
+  },
+  "resolvedFindings": [
+    "Fake menu provider returned keys outside request schema; fixture now derives candidates from actual schema.",
+    "Explicitly named catalog keys now have priority in advisor candidate selection.",
+    "Native drafts capture their base revision and retain failed submissions; rebasing requires an explicit action.",
+    "World PATCH uses bounded compact response and parses nested config.revision."
+  ],
+  "gameExecuted": false,
+  "installed": false,
+  "humanControllerTested": false,
+  "nativeAudioHeard": false,
+  "certification": "not certified in the game"
+}

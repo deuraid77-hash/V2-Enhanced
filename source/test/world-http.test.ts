@@ -57,7 +57,8 @@ test('real HTTP world control, settings persistence, SSE updates and session ack
       const saved = await send('/api/world/config', { settings: { gangAggression: 90, ambientTaunts: false } }, 'PATCH');
       assert.equal(saved.status, 200); const result = await saved.json(); assert.equal(result.config.revision, 2); assert.equal(result.appliedRevision, 0);
       const broadcast = await nextWorld(); assert.equal(broadcast.config.settings.gangAggression, 90);
-      assert.equal(JSON.parse(fs.readFileSync(path.join(data, 'world-settings.json'), 'utf8')).settings.ambientTaunts, false);
+      const persisted = JSON.parse(fs.readFileSync(path.join(data, 'npc-settings-v4.json'), 'utf8')).world;
+      assert.equal(persisted.settings.ambientTaunts, false); assert.equal(persisted.revision, 2);
     });
     await t.test('exchange carries desired config and only game observations appear in live snapshot', async () => {
       const response = await send('/api/runtime/exchange', frame); assert.equal(response.status, 200);
@@ -104,8 +105,9 @@ test('real HTTP world control, settings persistence, SSE updates and session ack
       for (let i = 0; i < 35; i++) { const response = await send('/api/world/config', { settings: { ambientHostility: 60 + i % 2 } }, 'PATCH'); if (response.status === 429) { limited = response; break; } }
       assert.ok(limited); assert.ok(Number(limited.headers.get('retry-after')) > 0);
       assert.equal((await limited.json()).success, false);
-      const saved = JSON.parse(fs.readFileSync(path.join(data, 'world-settings.json'), 'utf8'));
-      assert.deepEqual(saved, (await getWorld()).config);
+      const saved = JSON.parse(fs.readFileSync(path.join(data, 'npc-settings-v4.json'), 'utf8')).world;
+      const live = (await getWorld()).config;
+      assert.deepEqual(saved.settings, live.settings); assert.equal(saved.revision, live.revision);
     });
   } finally {
     abort.abort(); await stream?.cancel().catch(() => {});

@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { validateTelemetry } from './compatibility.ts';
+import {WORLD_DEFAULT_SETTINGS as DEFAULT_SETTINGS,WORLD_SETTING_RANGES as ranges} from '../shared/world-settings.ts';
+export {DEFAULT_SETTINGS};
 
 export const WORLD_PROTOCOL = 3;
 export const WORLD_FRESH_MS = 5_000;
@@ -11,13 +13,12 @@ export const MAX_CONFIG_REVISION = 2_147_483_647; // The .NET Framework client u
 export const GANGS = ['Families', 'Ballas', 'Vagos'] as const;
 export const DISTRICTS = ['grove', 'forum', 'rancho', 'chamberlain', 'davis', 'cypress'] as const;
 export const WEATHER = ['CLEAR', 'EXTRASUNNY', 'CLOUDS', 'OVERCAST', 'RAIN', 'THUNDER', 'FOGGY', 'SMOG'] as const;
-export const DEFAULT_SETTINGS = Object.freeze({
-  enabled: true, ambientHostility: 65, gangAggression: 75, civilianPanic: 70,
-  eventIntervalSeconds: 75, maxActiveEvents: 2, maxSpawnedPeds: 16,
-  turfWars: true, streetFights: true, ambientTaunts: true, tacticalRetreat: true,
-  blips: true, subtitles: true, protectMissions: true,
-});
 export type Settings = { -readonly [K in keyof typeof DEFAULT_SETTINGS]: typeof DEFAULT_SETTINGS[K] extends boolean ? boolean : number };
+export interface WorldConfigurationAuthority {
+  read(): { revision: number; settings: Settings };
+  write(value: { revision: number; settings: Settings }, source: string): void;
+  subscribe(listener: () => void): () => unknown;
+}
 export type CommandType = 'start_turf_war' | 'start_street_fight' | 'clear_events' | 'set_weather' | 'set_time' | 'set_wanted' | 'talk';
 export type WorldCommand = {
   id: string; requestId: string; runtimeId: string; type: CommandType; payload: Record<string, string | number>;
@@ -71,10 +72,6 @@ function uniqueIds<T extends { id: string }>(values: T[], name: string): T[] {
 function onlyKeys(value: Record<string, unknown>, allowed: readonly string[], name: string) {
   if (Object.keys(value).some(k => !allowed.includes(k))) throw new WorldError(`${name} contains an unsupported field.`);
 }
-const ranges: Partial<Record<keyof Settings, [number, number]>> = {
-  ambientHostility: [0, 100], gangAggression: [0, 100], civilianPanic: [0, 100],
-  eventIntervalSeconds: [30, 300], maxActiveEvents: [1, 3], maxSpawnedPeds: [4, 24],
-};
 
 export function validateSettings(value: unknown, partial = false): Partial<Settings> {
   const input = obj(value, 'settings');
@@ -84,7 +81,7 @@ export function validateSettings(value: unknown, partial = false): Partial<Setti
   const result: Record<string, number | boolean> = {};
   for (const [key, value] of Object.entries(input)) {
     const range = ranges[key as keyof Settings];
-    result[key] = range ? integer(value, key, ...range) : flag(value, key);
+    result[key] = range ? integer(value, key, range[0],range[1]) : flag(value, key);
   }
   return result as Partial<Settings>;
 }
@@ -174,6 +171,7 @@ export class WorldState {
   private receiptFile?: string;
   private retiredRuntimeIds = new Set<string>();
   private listeners = new Set<() => void>();
+  private configurationAuthority?: WorldConfigurationAuthority;
   constructor(private settingsFile?: string, private now: () => number = Date.now) {
     if (!settingsFile) return;
     this.receiptFile = path.join(path.dirname(settingsFile), 'world-requests.json');
@@ -220,6 +218,18 @@ export class WorldState {
     }
   }
   subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
+  // V4 stores NPC and world settings in one atomic document. The original
+  // V3 file remains intact for rollback. Standalone V3 instances keep their
+  // original persistence path and protocol behavior.
+  useConfigurationAuthority(authority: WorldConfigurationAuthority) {
+    if (this.configurationAuthority) throw new WorldError('Director settings authority is already attached.',409);
+    this.configurationAuthority = authority;
+    this.config = structuredClone(authority.read());
+    authority.subscribe(() => {
+      const next = authority.read();
+      if (next.revision !== this.config.revision) { this.config = structuredClone(next); this.publish(); }
+    });
+  }
   private publish() { for (const listener of this.listeners) { try { listener(); } catch { /* A closed browser cannot interrupt the game exchange. */ } } }
   private connected(now = this.now()) { return this.lastSeen !== null && now >= this.lastSeen && now - this.lastSeen < WORLD_FRESH_MS; }
   private expire(now: number) {
@@ -234,7 +244,9 @@ export class WorldState {
       telemetry: this.telemetry, commands: [...this.commands].reverse(), events: [...this.events].reverse() });
   }
   configure(value: unknown) {
-    const input = obj(value, 'config request'); onlyKeys(input, ['settings'], 'config request');
+    const input = obj(value, 'config request'); onlyKeys(input, ['settings','expectedRevision','source'], 'config request');
+    if (input.expectedRevision !== undefined && input.expectedRevision !== this.config.revision) throw new WorldError('Director settings changed elsewhere. Refresh before applying this edit.',409);
+    const source = input.source === undefined ? 'portal' : oneOf(input.source, ['portal','game','advisor','profile','defaults'], 'settings source');
     const settings = { ...this.config.settings, ...validateSettings(input.settings, true) };
     const sameSettings = (a: Settings, b: Settings) => (Object.keys(DEFAULT_SETTINGS) as Array<keyof Settings>).every(key => a[key] === b[key]);
     const observedDivergence = this.telemetry !== null && (!sameSettings(this.telemetry.director.settings, settings) || this.telemetry.director.enabled !== settings.enabled);
@@ -244,6 +256,14 @@ export class WorldState {
     if (sameSettings(settings, this.config.settings) && !observedDivergence) return this.snapshot();
     if (this.config.revision >= MAX_CONFIG_REVISION) throw new WorldError('Director revision limit reached.', 409);
     const next = { revision: this.config.revision + 1, settings };
+    if (this.configurationAuthority) {
+      try { this.configurationAuthority.write(next,source); }
+      catch (error) {
+        const status=error && typeof error==='object' && 'status' in error && error.status===409 ? 409 : 500;
+        throw new WorldError(status===409?'Director settings changed elsewhere. Refresh before applying this edit.':'Director settings could not be saved. The previous revision is unchanged.',status);
+      }
+      return this.snapshot();
+    }
     if (this.settingsFile) {
       let temporary: string | undefined;
       try {

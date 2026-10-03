@@ -12,7 +12,10 @@ import { GeminiProvider, providerError } from './server-lib/ai-provider.ts';
 import { AiService } from './server-lib/ai-service.ts';
 import { installAiRoutes } from './server-lib/ai-routes.ts';
 import { meteredLegacyClient } from './server-lib/ai-legacy.ts';
-import { createDiagnosticReport, writeDiagnosticReport } from './server-lib/diagnostics.ts';
+import { createDiagnosticReport } from './server-lib/diagnostics.ts';
+import { installDiagnosticRoutes } from './server-lib/diagnostic-routes.ts';
+import { MenuAiService } from './server-lib/ai-menu.ts';
+import { installMenuAiRoutes } from './server-lib/ai-menu-routes.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,8 +45,12 @@ const runtime = new RuntimeStatus();
 const world = new WorldState(path.join(process.env.LLAI_DATA_DIR || path.join(__dirname, 'data'), 'world-settings.json'));
 const npcDataDirectory = process.env.LLAI_DATA_DIR || path.join(process.env.LOCALAPPDATA || path.join(__dirname, 'data'), 'LivingLosSantos', 'Enhanced');
 export const npcSettings = new SettingsStore(path.join(npcDataDirectory, 'npc-settings-v4.json'));
+npcSettings.bindWorld(world);
 export const aiProvider = new GeminiProvider(getRawAI, hasGemini);
 export const aiService = new AiService({ provider: aiProvider, getSettings: () => npcSettings.snapshot().settings, directory: npcDataDirectory });
+const diagnosticReport = () => createDiagnosticReport({ settings: npcSettings.snapshot(), world: world.snapshot(), ai: aiService.status(), audio: { available: false } });
+export const menuAiService = new MenuAiService({ provider: aiProvider, budget: aiService.budget, scheduler: aiService.scheduler, getSettings: () => npcSettings.snapshot().settings, snapshot: () => npcSettings.snapshot(),
+  previewBundle: (settings, worldPatch) => { npcSettings.previewBundle(settings, worldPatch); }, applyBundle: (settings, worldPatch, revision, worldRevision) => npcSettings.configureBundle(settings, worldPatch, 'advisor', revision, worldRevision), diagnosticReport, directory: npcDataDirectory });
 npcSettings.subscribe(() => aiService.settingsChanged());
 function getAI(): GoogleGenAI { return meteredLegacyClient(getRawAI(), aiService.budget, aiService.scheduler, () => aiService.scope(), () => npcSettings.snapshot().settings); }
 
@@ -100,14 +107,10 @@ const recordWorldTelemetry = (telemetry: unknown) => {
   runtime.record({ ...input, player: input.player ?? undefined, environment: input.environment ?? undefined });
 };
 installSettingsRoutes(app, npcSettings);
-installAiRoutes(app, aiService, world, npcSettings, recordWorldTelemetry);
+installAiRoutes(app, aiService, world, npcSettings, recordWorldTelemetry, () => menuAiService.status());
+installMenuAiRoutes(app, menuAiService);
 installWorldRoutes(app, world, recordWorldTelemetry);
-const diagnosticReport = () => createDiagnosticReport({ settings: npcSettings.snapshot(), world: world.snapshot(), ai: aiService.status(), audio: { available: false } });
-app.get('/api/diagnostics', (_req, res) => res.json({ success: true, report: diagnosticReport() }));
-app.post('/api/diagnostics/export', (_req, res) => {
-  try { res.json({ success: true, ...writeDiagnosticReport(path.join(npcDataDirectory, 'diagnostics'), diagnosticReport()) }); }
-  catch { res.status(500).json({ success: false, error: 'Sanitized diagnostic report could not be saved.' }); }
-});
+installDiagnosticRoutes(app,path.join(npcDataDirectory,'diagnostics'),diagnosticReport);
 
 // Local companion memory only; independent of the installed mod and Firebase.
 const memoryFile = path.join(process.env.LLAI_DATA_DIR || path.join(__dirname, 'data'), 'npc-memories.json');

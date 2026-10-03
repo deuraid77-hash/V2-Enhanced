@@ -17,9 +17,9 @@ using Screen=GTA.UI.Screen;
 [assembly: System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.8")]
 namespace LivingLosSantosV2
 {
-    public sealed class EnhancedClient : Script
+    public sealed partial class EnhancedClient : Script
     {
-        private const string PluginVersion="4.0.0-foundation-enhanced";
+        private const string PluginVersion="4.0.0-menu-enhanced";
         private readonly string runtimeId="lls4-"+Guid.NewGuid().ToString("N");
         private string sceneEpoch=Guid.NewGuid().ToString("N"), registeredEpoch;
         private readonly NpcSettingsState npcSettings=new NpcSettingsState();
@@ -77,11 +77,14 @@ namespace LivingLosSantosV2
             try { director.Settings=campaign.Load(director.Territories); }
             catch(Exception ex) { Log("Campaign restore rejected: "+ex.GetType().Name); try { Log("Rejected campaign preserved at "+campaign.PreserveRejected()); } catch { campaign=null; Log("Unable to preserve rejected campaign; campaign writes disabled this session."); } Emit("campaign_warning","Campaign restore rejected; original data preserved. Defaults are active.",null,null); }
             Tick+=OnTick; KeyDown+=OnKeyDown; Aborted+=OnAborted;
+            InitializeMenu();
             Log("Client "+PluginVersion+" started; protocol4; EXE "+compatibility.GameFileVersion+"; SDK "+compatibility.ApiVersion+"; tested="+compatibility.Supported+"; 15 second readiness grace.");
         }
         private void OnKeyDown(object sender,KeyEventArgs args)
         {
-            if(!stopping) input.Queue(args.KeyCode);
+            if(stopping)return;
+            if(nativeMenu!=null&&nativeMenu.IsOpen&&args.KeyCode.ToString()!=npcSettings.Text("controls.panicKey")){if(!nativeMenu.KeyboardOpen)nativeMenu.Queue(args.KeyCode);return;}
+            input.Queue(args.KeyCode);
         }
         private void OnTick(object sender,EventArgs args)
         {
@@ -96,11 +99,13 @@ namespace LivingLosSantosV2
                 string pause=EffectivePause(player);
                 storyModeReady=pause==null;
                 UpdateScene(player,pause);
-                foreach(string action in input.Poll(npcSettings,keyboardTarget!=null,storyModeReady)) {
-                    if(action=="panic") { panic=true; pause="Panic stop active; restart the script to resume"; storyModeReady=false; UpdateScene(player,pause); CancelConversation("Panic stop"); CancelKeyboard(); director.Clear("Panic stop"); promptRequested=false; toggleRequested=false; Caption("Panic stop: owned scenarios and AI cancelled.",5000); break; }
+                bool canMenu=nativeMenu.IsOpen||CanOpenMenu(player);
+                foreach(string action in input.Poll(npcSettings,keyboardTarget!=null||nativeMenu.KeyboardOpen,storyModeReady&&!nativeMenu.IsOpen&&canMenu,canMenu)) {
+                    if(action=="panic") { panic=true; pause="Panic stop active; restart the script to resume"; storyModeReady=false; UpdateScene(player,pause); CancelConversation("Panic stop"); CancelKeyboard(); nativeMenu.PanicStop(); director.Clear("Panic stop"); promptRequested=false; toggleRequested=false; Caption("Panic stop: owned scenarios and AI cancelled.",5000); break; }
                     else if(action=="talk"&&!dialoguePending&&keyboardTarget==null) promptRequested=true;
                     else if(action=="director") toggleRequested=true;
-                    else if(action=="menu"||action=="wheel") Caption("NPC foundation: full menu and reply wheel arrive in the next verified stage. "+input.TalkPrompt(npcSettings),3500);
+                    else if(action=="menu") ToggleMenu(player);
+                    else if(action=="wheel") Caption("Conversation reply wheel is scheduled for the next overhaul stage.",3000);
                 }
                 if(toggleRequested) { toggleRequested=false; if(storyModeReady) { director.Toggle(); Caption("Street director "+(director.Settings.enabled?"ON":"OFF"),2500); } }
                 PollKeyboard(player);
@@ -121,11 +126,13 @@ namespace LivingLosSantosV2
                 }
                 if(storyModeReady&&npcSettings.Flag("general.hints")) { if(now>=nextHint) { nextHint=now.AddSeconds(10); hintUntil=now.AddSeconds(2); } if(now<hintUntil) Screen.ShowHelpTextThisFrame("Living Los Santos: "+input.TalkPrompt(npcSettings)); }
                 if((scanCandidates.Count>0||now>=nextScan)&&metrics.HasBudget(npcSettings.Number("performance.tickBudgetMs"))) Scan(player); else if(scanCandidates.Count>0||now>=nextScan) metrics.Deferred++;
+                TickMenu(player);
                 if(!exchangePending&&now>=nextExchange) { nextExchange=now.AddSeconds(1); Exchange(player); }
             }
             catch(Exception ex)
             {
                 promptRequested=false;
+                try {nativeMenu.Close();}catch{}
                 if(DateTime.UtcNow>=nextErrorLog) { nextErrorLog=DateTime.UtcNow.AddSeconds(10); Log("Tick failure "+ex.GetType().Name+" at "+(ex.TargetSite==null?"unknown":ex.TargetSite.DeclaringType.FullName+"."+ex.TargetSite.Name)); Emit("runtime_error","A director operation failed. See the local diagnostic log.",null,null); }
                 try { director.Clear("Encounter cancelled after runtime error"); } catch { Log("Cleanup requires script abort or game exit."); }
             }
@@ -143,7 +150,8 @@ namespace LivingLosSantosV2
             if(DateTime.UtcNow<readyAt) return "Starting director: waiting for Story Mode to settle";
             if(npcSettings.Flag("safety.protectMissions")&&Game.IsMissionActive) return "Story mission protected";
             string pause=WorldDirector.ScenePause(player,director.Settings);
-            return (keyboardTarget!=null||DateTime.UtcNow<keyboardReleasedUntil)&&pause=="Player control unavailable"?"Dialogue keyboard open":pause;
+            if((keyboardTarget!=null||nativeMenu!=null&&nativeMenu.KeyboardOpen||DateTime.UtcNow<keyboardReleasedUntil)&&pause=="Player control unavailable")return "Dialogue keyboard open";
+            return pause??(nativeMenu!=null&&nativeMenu.IsOpen?"Native menu open":null);
         }
         private void StartDialogue(Ped target,Ped player,string utterance,string command)
         {
@@ -157,7 +165,7 @@ namespace LivingLosSantosV2
         }
         private void UpdateScene(Ped player,string pause)
         {
-            bool hard=pause!=null&&pause!="Game paused"&&pause!="Dialogue keyboard open";
+            bool hard=pause!=null&&pause!="Game paused"&&pause!="Dialogue keyboard open"&&pause!="Native menu open";
             int handle=player!=null&&player.Exists()?player.Handle:0;
             if((hard&&lastHardPause!=pause)||(lastPlayerHandle!=0&&handle!=lastPlayerHandle)) {
                 sceneEpoch=Guid.NewGuid().ToString("N"); registeredEpoch=null; CancelConversation("Scene changed"); CancelKeyboard(); observedNpcs.Clear(); scanCandidates.Clear(); seen.Clear(); nextScan=DateTime.MinValue;
@@ -450,6 +458,7 @@ namespace LivingLosSantosV2
             stopping=true; storyModeReady=false; promptRequested=false;
             CancelConversation("Script unloading");
             try { CancelKeyboard(); } catch { }
+            try { if(nativeMenu!=null)nativeMenu.Close(); } catch { }
             try { RestoreWeapons(true); } catch { Log("A temporary weapon selection could not be restored during abort."); }
             try { director.Dispose(); SaveCampaign(); } catch(Exception ex) { Log("Abort cleanup: "+ex.GetType().Name); }
             cancellation.Cancel(); transport.Dispose(); Completion item; while(completed.TryDequeue(out item)) {}

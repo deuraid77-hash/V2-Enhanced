@@ -19,3 +19,19 @@ test('diagnostics use protocol4 metadata rather than its compatibility mirror',(
  const report=createDiagnosticReport({world:{connected:true,telemetry:{protocol:3,pluginVersion:'4.0.0-foundation-enhanced',gameVersion:'1.0.1158.16',appliedRevision:2,npcs:[]}},ai:{capabilities:{provider:'gemini'},runtime:{protocol:4,gameFileVersion:'1.0.1158.16',sdkGameVersion:'2.0.1158.16',appliedNpcRevision:7,tickMetrics:{p95Ms:0.4,sampleCount:240}}}});
  assert.equal(report.versions.protocol,4);assert.equal(report.versions.executable,'1.0.1158.16');assert.equal(report.versions.sdk,'2.0.1158.16');assert.equal(report.game.npcSettingsRevision,7);assert.equal(report.ai.provider,'gemini');assert.equal((report.game.metrics.tick as any).p95Ms,0.4);
 });
+
+test('diagnostics allow only known error codes and typed world values',()=>{
+ const report=createDiagnosticReport({settings:{world:{revision:4,settings:{gangAggression:75,enabled:true,subtitles:'PRIVATE',prompt:'PRIVATE'}}},ai:{recentJobs:[{status:'failed',reasonCode:'provider_permission',message:'PRIVATE'},{status:'PRIVATE',reasonCode:'daily_budget'},{status:'failed',reasonCode:'private_payload'}]}});
+ assert.deepEqual(report.ai.lastErrors,[{code:'provider_permission',status:'failed'},{code:'daily_budget',status:'unknown'}]);
+ assert.equal(report.settings.worldRevision,4);assert.deepEqual(report.settings.worldConfiguration,{enabled:true,gangAggression:75});
+ assert.equal(JSON.stringify(report).includes('PRIVATE'),false);assert.equal(JSON.stringify(report).includes('private_payload'),false);
+});
+
+test('diagnostic export stops at a bounded count and preserves prior reports and unrelated files',()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'lls4-diagnostics-cap-'));try{
+  const report=createDiagnosticReport({});fs.writeFileSync(path.join(root,'user-notes.txt'),'preserve');
+  for(let i=0;i<32;i++)writeDiagnosticReport(root,report);
+  assert.throws(()=>writeDiagnosticReport(root,report),/limit reached/);
+  assert.equal(fs.readdirSync(root).length,33);assert.equal(fs.readFileSync(path.join(root,'user-notes.txt'),'utf8'),'preserve');
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});

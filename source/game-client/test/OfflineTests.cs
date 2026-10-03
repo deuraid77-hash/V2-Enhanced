@@ -100,6 +100,7 @@ internal static class OfflineTests
         Check("caller cancellation", delegate { using(var t=new DashboardTransport("http://127.0.0.1:9/")) using(var c=new CancellationTokenSource()) { c.Cancel(); Reject(delegate { t.PostAsync("api/dialogue","{}",c.Token).GetAwaiter().GetResult(); }); } });
         WorldPolicyTests.Run(Check);
         FoundationTests.Run(Check);
+        MenuPolicyTests.Run(Check);
         string json=new JavaScriptSerializer().Serialize(new { checkedAt=DateTime.UtcNow.ToString("o"), total=Results.Count, passed=Results.Count-failed, failed=failed, gameExecuted=false, realApiCalled=false, tests=Results });
         if(args.Length>0) File.WriteAllText(args[0],json,Encoding.UTF8);
         Console.WriteLine((Results.Count-failed)+"/"+Results.Count+" passed");

@@ -4,14 +4,14 @@ import { AiError } from './ai-types.ts';
 import type { WorldState } from './world.ts';
 import { WorldError } from './world.ts';
 import type { SettingsStore } from './settings-store.ts';
-export function installAiRoutes(app: express.Express, service: AiService, world: WorldState, settings: SettingsStore, onTelemetry: (input: Record<string, unknown>) => void) {
+export function installAiRoutes(app: express.Express, service: AiService, world: WorldState, settings: SettingsStore, onTelemetry: (input: Record<string, unknown>) => void, menuStatus?: () => unknown) {
   function fail(res: express.Response, error: unknown) {
     res.status(error instanceof AiError || error instanceof WorldError ? error.status : 500).json({ success: false, code: error instanceof AiError ? error.code : 'ai_request_failed', error: error instanceof AiError || error instanceof WorldError ? error.message : 'The AI request could not be completed.' });
   }
   const bounded: express.RequestHandler = (req, res, next) => { if (Buffer.byteLength(JSON.stringify(req.body ?? {}), 'utf8') > 128 * 1024) { res.status(413).json({ success: false, code: 'frame_size', error: 'AI requests may contain at most 128 KiB.' }); return; } next(); };
   let windowStart = 0, requests = 0;
   const limited: express.RequestHandler = (_req, res, next) => { const now = Date.now(); if (now - windowStart > 10000) { windowStart = now; requests = 0; } if (++requests > 100) { res.setHeader('Retry-After', '10'); res.status(429).json({ success: false, code: 'rate_limit', error: 'AI route request limit reached.' }); return; } next(); };
-  app.get('/api/ai/status', limited, (_req, res) => { try { res.json(service.status()); } catch (error) { fail(res, error); } });
+  app.get('/api/ai/status', limited, (_req, res) => { try { res.json({ ...service.status(), ...(menuStatus ? { menu: menuStatus() } : {}) }); } catch (error) { fail(res, error); } });
   app.post('/api/ai/jobs', limited, bounded, (req, res) => { try { res.status(202).json({ success: true, job: service.enqueue(req.body) }); } catch (error) { fail(res, error); } });
   app.get('/api/ai/jobs/:id', limited, (req, res) => { try { res.json({ success: true, job: service.job(req.params.id) }); } catch (error) { fail(res, error); } });
   app.delete('/api/ai/jobs/:id', limited, (req, res) => { try { res.json({ success: true, job: service.cancel(req.params.id) }); } catch (error) { fail(res, error); } });

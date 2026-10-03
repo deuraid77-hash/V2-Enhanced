@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SETTINGS_CATALOG } from '../shared/settings.ts';
+import { SETTINGS_CATALOG, CONTROLLER_BINDINGS } from '../shared/settings.ts';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const q=(s:string)=>JSON.stringify(s).replace(/\\u2028/g,' ');
 const lit=(v:unknown)=>typeof v==='string'?q(v):typeof v==='number'?`${v}d`:String(v);
@@ -18,6 +18,7 @@ public sealed class SettingDefinition {
  public string[] Options;
 }
 public static class SettingsCatalog {
+ public static readonly int[] ControllerBindings=new int[]{${CONTROLLER_BINDINGS.join(',')}};
  public static readonly SettingDefinition[] All = new SettingDefinition[] {
 ${SETTINGS_CATALOG.map(s=>`  new SettingDefinition { Key=${q(s.key)},Label=${q(s.label)},Group=${q(s.group)},Kind=${q(s.type)},Default=${lit(s.default)},Min=${s.min??0}d,Max=${s.max??0}d,Step=${s.step??1}d,Options=new string[]{${(s.options??[]).map(q).join(',')}},Tooltip=${q(s.tooltip)},Consumer=${q(s.consumer)} }`).join(',\n')}
  };
@@ -34,6 +35,8 @@ ${SETTINGS_CATALOG.map(s=>`  new SettingDefinition { Key=${q(s.key)},Label=${q(s
     double n=Convert.ToDouble(pair.Value,CultureInfo.InvariantCulture);
     bool integral=s.Min==Math.Truncate(s.Min)&&s.Max==Math.Truncate(s.Max)&&s.Step==Math.Truncate(s.Step);
     if(Double.IsNaN(n)||Double.IsInfinity(n)||n<s.Min||n>s.Max||(integral&&n!=Math.Truncate(n)))throw new InvalidOperationException("Out-of-range setting.");
+    if(s.Key.StartsWith("controls.controller")&&Array.IndexOf(ControllerBindings,(int)n)<0)throw new InvalidOperationException("Choose a documented controller button, not an axis.");
+    if(s.Key=="controls.menuModifier"&&(n<226||n>229))throw new InvalidOperationException("Menu modifier must be a shoulder button or trigger.");
    } else {
     var text=pair.Value as string;
     if(String.IsNullOrWhiteSpace(text)||text.Length>128)throw new InvalidOperationException("Invalid text setting.");
@@ -46,6 +49,14 @@ ${SETTINGS_CATALOG.map(s=>`  new SettingDefinition { Key=${q(s.key)},Label=${q(s
     }
    }
    output.Add(pair.Key,pair.Value);
+  }
+  if(output.Count==All.Length) {
+   if(Convert.ToDouble(output["ai.liveReservedSlots"])>=Convert.ToDouble(output["ai.maxConcurrent"]))throw new InvalidOperationException("Leave a background AI slot available.");
+   if(Convert.ToDouble(output["conversation.walkAwayMeters"])<Convert.ToDouble(output["conversation.rangeMeters"]))throw new InvalidOperationException("Walk-away range is smaller than start range.");
+   if(Convert.ToDouble(output["audio.referenceDistanceMeters"])>Convert.ToDouble(output["audio.maxDistanceMeters"]))throw new InvalidOperationException("Audio reference exceeds maximum range.");
+   if(Convert.ToDouble(output["bank.refillThreshold"])>Convert.ToDouble(output["bank.maxLinesPerBucket"]))throw new InvalidOperationException("Bank refill exceeds capacity.");
+   var keys=new HashSet<string>();foreach(string key in new[]{"menuKey","talkKey","wheelKey","pttKey","panicKey"})if(!keys.Add(Convert.ToString(output["controls."+key])))throw new InvalidOperationException("Duplicate keyboard binding.");
+   var buttons=new HashSet<int>();foreach(string key in new[]{"controllerMenu","controllerTalk","controllerWheel","controllerPtt","controllerPanic","menuModifier"}) {int button=Convert.ToInt32(output["controls."+key]);if(button==51)button=235;if(button==52)button=234;if(!buttons.Add(button))throw new InvalidOperationException("Duplicate physical controller binding.");}
   }
   return output;
  }

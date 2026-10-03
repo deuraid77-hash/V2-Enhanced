@@ -30,7 +30,7 @@ $codeText = [regex]::Replace($sourceText,'@"(?:""|[^"])*"|"(?:\\.|[^"\\])*"|//[^
 $customMemoryOrPInvoke = [bool]($codeText -match 'DllImport|Marshal\.|unsafe\s|MemoryAddress|MemoryAccess|FindPattern|ReadProcessMemory|WriteProcessMemory')
 $compiledImports = @($client.MainModule.Types | ForEach-Object { $_.Methods } | Where-Object IsPInvokeImpl)
 $customMemoryOrPInvoke = $customMemoryOrPInvoke -or $compiledImports.Count -gt 0
-$files = @('LivingLSAIsV2.Enhanced.cs','WorldDirector.cs','WorldPolicy.cs','ResponsePolicy.cs','DashboardTransport.cs','FoundationPolicy.cs','RuntimeCompatibility.cs','InputRouter.cs','SettingsCatalog.Generated.cs','LivingLSAIsV2.Enhanced.csproj','Build-EnhancedClient.ps1','Test-EnhancedClient.ps1','Build-WorldProbe.ps1','Build-FoundationProbe.ps1','test\OfflineTests.cs','test\WorldPolicyTests.cs','test\FoundationTests.cs','test\FoundationContractProbe.cs','test\WorldContractProbe.cs','test\DashboardContractProbe.cs','bin\LivingLSAIsV2.Enhanced.dll') | ForEach-Object { $file=Join-Path $PSScriptRoot $_; [PSCustomObject]@{Path=$_;SHA256=(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash;Bytes=(Get-Item -LiteralPath $file).Length} }
+$files = @('LivingLSAIsV2.Enhanced.cs','WorldDirector.cs','WorldPolicy.cs','ResponsePolicy.cs','DashboardTransport.cs','FoundationPolicy.cs','RuntimeCompatibility.cs','InputRouter.cs','MenuBridge.cs','MenuPolicy.cs','NativeMenu.cs','SettingsCatalog.Generated.cs','LivingLSAIsV2.Enhanced.csproj','Build-EnhancedClient.ps1','Test-EnhancedClient.ps1','Build-WorldProbe.ps1','Build-FoundationProbe.ps1','Build-MenuProbe.ps1','test\MenuPolicyTests.cs','test\MenuContractProbe.cs','test\OfflineTests.cs','test\WorldPolicyTests.cs','test\FoundationTests.cs','test\FoundationContractProbe.cs','test\WorldContractProbe.cs','test\DashboardContractProbe.cs','bin\LivingLSAIsV2.Enhanced.dll') | ForEach-Object { $file=Join-Path $PSScriptRoot $_; [PSCustomObject]@{Path=$_;SHA256=(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash;Bytes=(Get-Item -LiteralPath $file).Length} }
 $result = [ordered]@{
     CheckedAtUTC=[DateTime]::UtcNow.ToString('o')
     GameFileVersion=(Get-Item -LiteralPath (Join-Path $GameRoot 'GTA5_Enhanced.exe')).VersionInfo.FileVersion
@@ -39,7 +39,9 @@ $result = [ordered]@{
     ApiSHA256=(Get-FileHash -LiteralPath $apiPath -Algorithm SHA256).Hash
     ClientAssemblyVersion=$client.Name.Version.ToString()
     ClientProtocol=4
-    FoundationOnly=$true
+    ImplementedStage='Step 2 native menu and protocol 4 foundation'
+    NativeMenuImplemented=$true
+    NativeMenuGameVerified=$false
     TargetFramework='.NET Framework 4.8'
     Compiler=(Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
     ModuleArchitecture=$client.MainModule.Architecture.ToString()

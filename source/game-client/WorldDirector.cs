@@ -98,7 +98,7 @@ namespace LivingLosSantosV2
             if(pause!=null)
             {
                 // Ending owned encounters prevents combat spilling into a cutscene, mission or interior.
-                if(pause!="Game paused"&&pause!="Dialogue keyboard open") Clear("Scene changed: "+pause);
+                if(pause!="Game paused"&&pause!="Dialogue keyboard open"&&pause!="Native menu open") Clear("Scene changed: "+pause);
                 else foreach(Encounter e in encounters) { e.Started=e.Started.AddMilliseconds(250); e.StateAt=e.StateAt.AddMilliseconds(250); }
                 return;
             }
