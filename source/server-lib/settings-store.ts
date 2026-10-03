@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { BUILTIN_PROFILES, DEFAULT_NPC_SETTINGS, physicalControllerBinding, validateNpcSettings, type NpcSettings } from '../shared/settings.ts';
+import { BUILTIN_PROFILES, DEFAULT_NPC_SETTINGS, migrateSavedNpcSettings, physicalControllerBinding, validateNpcSettings, type NpcSettings } from '../shared/settings.ts';
 import { DEFAULT_SETTINGS, MAX_CONFIG_REVISION, validateSettings, type Settings, type WorldState } from './world.ts';
 
 export class SettingsError extends Error { constructor(message: string, public status = 400) { super(message); } }
@@ -52,10 +52,10 @@ export class SettingsStore {
       const doc = record(JSON.parse(fs.readFileSync(file,'utf8')));
       if (doc.version !== 4) throw new Error('version');
       const snapshot = record(doc.snapshot);
-      const settings = validateNpcSettings(snapshot.settings, false); validateCombined(settings);
+      const settings = migrateSavedNpcSettings(snapshot.settings); validateCombined(settings);
       if (!Number.isSafeInteger(snapshot.revision) || Number(snapshot.revision) < 1 || Number(snapshot.revision) > 2147483647 || !sources.includes(snapshot.source as SettingsSource) || typeof snapshot.updatedAt !== 'string' || !Number.isFinite(Date.parse(snapshot.updatedAt))) throw new Error('snapshot');
       if (!Array.isArray(doc.profiles) || doc.profiles.length > 32) throw new Error('profiles');
-      const profiles: Profile[] = doc.profiles.map(p => { const v = record(p), settings = validateNpcSettings(v.settings, false); validateCombined(settings); return {name:name(v.name),settings,worldSettings:validateSettings(v.worldSettings ?? DEFAULT_SETTINGS) as Settings,updatedAt:String(v.updatedAt).slice(0,40)}; });
+      const profiles: Profile[] = doc.profiles.map(p => { const v = record(p), settings = migrateSavedNpcSettings(v.settings); validateCombined(settings); return {name:name(v.name),settings,worldSettings:validateSettings(v.worldSettings ?? DEFAULT_SETTINGS) as Settings,updatedAt:String(v.updatedAt).slice(0,40)}; });
       if (new Set(profiles.map(p=>p.name)).size !== profiles.length) throw new Error('duplicate profiles');
       if (doc.world !== undefined) {
         const w=record(doc.world);
@@ -184,6 +184,6 @@ export class SettingsStore {
     if(input.format!=='LivingLosSantos.profile'||input.version!==4||Object.keys(input).some(k=>!['format','version','name','settings','worldSettings'].includes(k))) throw new SettingsError('Unsupported profile export.');
     if(input.worldSettings===undefined) throw new SettingsError('This older profile has no world settings. Add an explicit world snapshot before importing.');
     if(this.profiles.some(p=>p.name===input.name)) throw new SettingsError('A custom profile with this name already exists. Rename the import to preserve it.',409);
-    return this.saveProfile(input.name,input.settings,input.worldSettings);
+    return this.saveProfile(input.name,migrateSavedNpcSettings(input.settings),input.worldSettings);
   }
 }

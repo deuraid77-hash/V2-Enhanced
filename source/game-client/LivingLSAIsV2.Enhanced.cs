@@ -19,7 +19,7 @@ namespace LivingLosSantosV2
 {
     public sealed partial class EnhancedClient : Script
     {
-        private const string PluginVersion="4.0.0-menu-enhanced";
+        private const string PluginVersion="4.0.0-mind-enhanced";
         private readonly string runtimeId="lls4-"+Guid.NewGuid().ToString("N");
         private string sceneEpoch=Guid.NewGuid().ToString("N"), registeredEpoch;
         private readonly NpcSettingsState npcSettings=new NpcSettingsState();
@@ -37,7 +37,7 @@ namespace LivingLosSantosV2
         private string lastHardPause;
         private int lastPlayerHandle;
         private bool panic;
-        private DateTime nextHint=DateTime.MinValue,hintUntil=DateTime.MinValue,keyboardReleasedUntil=DateTime.MinValue, recentGunfire=DateTime.MinValue, nextScan=DateTime.MinValue;
+        private DateTime keyboardReleasedUntil=DateTime.MinValue, recentGunfire=DateTime.MinValue, nextScan=DateTime.MinValue;
         private readonly List<Dictionary<string,object>> observedNpcs=new List<Dictionary<string,object>>();
         private readonly Queue<Ped> scanCandidates=new Queue<Ped>();
         private DateTime lastScanStarted=DateTime.MinValue;
@@ -61,18 +61,19 @@ namespace LivingLosSantosV2
         private readonly object saveLock=new object();
         private string latestCampaign;
         private bool saveRunning;
-        private sealed class NpcMemory { public Ped Ped; public int Model,LastHealth; public DateTime LastUsed; public readonly List<Dictionary<string,object>> History=new List<Dictionary<string,object>>(); public string Note=""; public readonly NpcMind Mind=new NpcMind(); }
+        private sealed class NpcMemory { public Ped Ped; public int Model,LastHealth; public DateTime LastUsed; public readonly List<Dictionary<string,object>> History=new List<Dictionary<string,object>>(); public string Note=""; public readonly NpcMind Mind=new NpcMind();public Dictionary<string,object> Identity;public MindHydration Hydration; }
         private sealed class SeenNpc { public Ped Ped; public int Handle,Model; public DateTime At; }
-        private sealed class ActiveJob { public Ped Ped; public int Handle,Model,RequiredFrame,Attempts; public string RequestId=Guid.NewGuid().ToString(),JobId,Epoch,NpcId,Utterance; public Dictionary<string,object>[] History; public DateTime Deadline,NextSubmit; public bool Submitted; }
-        private sealed class WeaponLease { public Ped Ped; public int Handle,Model; public WeaponHash Original; public DateTime Until; }
+        private sealed class ActiveJob { public Ped Ped; public int Handle,Model,RequiredFrame,Attempts; public string RequestId=Guid.NewGuid().ToString(),JobId,Epoch,NpcId,Utterance,QuickJobId,QuickOptionId; public Dictionary<string,object>[] History; public DateTime Deadline,NextSubmit; public bool Submitted; }
+        private sealed class WeaponLease { public Ped Ped; public int Handle,Model; public WeaponHash Original,Selected; public DateTime Until; }
         private sealed class Completion
-        { public bool Job; public int Frame; public string Error,Epoch,RequestId; public string[] EventIds,AckIds,ReceiptIds,OutcomeIds; public Dictionary<string,object> Response; }
+        { public bool Job; public int Frame; public string Error,Epoch,RequestId,Kind; public string[] EventIds,AckIds,ReceiptIds,OutcomeIds,MindOutcomeIds,WitnessIds; public Dictionary<string,object> Response; }
         public EnhancedClient()
         {
             if(!String.Equals(System.Diagnostics.Process.GetCurrentProcess().ProcessName,"GTA5_Enhanced",StringComparison.OrdinalIgnoreCase)) { stopping=true; transport.Dispose(); return; }
             string executable=System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
             compatibility=RuntimeCompatibility.Inspect(executable,Path.Combine(Path.GetDirectoryName(executable),"ScriptHookVDotNet3.dll"));
             director=new WorldDirector(Emit,Acknowledge,SaveCampaign);
+            director.ExternalPedCount=()=>ActionOwnedCount;
             campaign=new CampaignStore(Path.Combine(dataDirectory,"campaign-v3.json"));
             try { director.Settings=campaign.Load(director.Territories); }
             catch(Exception ex) { Log("Campaign restore rejected: "+ex.GetType().Name); try { Log("Rejected campaign preserved at "+campaign.PreserveRejected()); } catch { campaign=null; Log("Unable to preserve rejected campaign; campaign writes disabled this session."); } Emit("campaign_warning","Campaign restore rejected; original data preserved. Defaults are active.",null,null); }
@@ -83,6 +84,7 @@ namespace LivingLosSantosV2
         private void OnKeyDown(object sender,KeyEventArgs args)
         {
             if(stopping)return;
+            if(replyWheel&&args.KeyCode.ToString()!=npcSettings.Text("controls.panicKey")&&args.KeyCode.ToString()!=npcSettings.Text("controls.menuKey")){if(replyKeys.Count<24)replyKeys.Enqueue(args.KeyCode);return;}
             if(nativeMenu!=null&&nativeMenu.IsOpen&&args.KeyCode.ToString()!=npcSettings.Text("controls.panicKey")){if(!nativeMenu.KeyboardOpen)nativeMenu.Queue(args.KeyCode);return;}
             input.Queue(args.KeyCode);
         }
@@ -105,13 +107,17 @@ namespace LivingLosSantosV2
                     else if(action=="talk"&&!dialoguePending&&keyboardTarget==null) promptRequested=true;
                     else if(action=="director") toggleRequested=true;
                     else if(action=="menu") ToggleMenu(player);
-                    else if(action=="wheel") Caption("Conversation reply wheel is scheduled for the next overhaul stage.",3000);
+                    else if(action=="wheel"){Ped target=talkSession!=null&&SessionValid(player)?talkSession.Ped:PickTalkTarget(player);if(target!=null)OpenReplyWheel(target,player);}
                 }
                 if(toggleRequested) { toggleRequested=false; if(storyModeReady) { director.Toggle(); Caption("Street director "+(director.Settings.enabled?"ON":"OFF"),2500); } }
                 PollKeyboard(player);
                 DrainCompleted(player,pause);
                 pause=EffectivePause(player); storyModeReady=pause==null; UpdateScene(player,pause);
                 CheckConversation(player,pause);
+                TickNpcActions(player,pause);
+                TickMind(player,pause);
+                TickConversationUI(player,pause);
+                TickPtt(player,pause);
                 RestoreWeapons(pause!=null);
                 var directorTimer=System.Diagnostics.Stopwatch.StartNew();
                 director.Tick(player,pause);
@@ -119,12 +125,11 @@ namespace LivingLosSantosV2
                 if(storyModeReady&&promptRequested)
                 {
                     promptRequested=false;
-                    float range=(float)npcSettings.Number("conversation.rangeMeters");
-                    Ped target=World.GetNearbyPeds(player,range).Where(p=>Interactable(p,player,range)).OrderBy(p=>p.Position.DistanceToSquared(player.Position)).FirstOrDefault();
-                    if(target==null) Caption("Stand within "+range+" metres of an available pedestrian on foot.",3000);
-                    else { keyboardTarget=new SeenNpc{Ped=target,Handle=target.Handle,Model=target.Model.Hash,At=now}; Function.Call(Hash.DISPLAY_ONSCREEN_KEYBOARD,0,"FMMC_KEY_TIP8","","","","","",240); }
+                    Ped target=talkSession!=null&&SessionValid(player)?talkSession.Ped:PickTalkTarget(player);
+                    if(target==null) Caption("Look at or approach an available NPC within the conversation range.",3000);
+                    else if(input.Controller)OpenReplyWheel(target,player);
+                    else if(BeginTalkSession(target,player)){keyboardTarget=new SeenNpc{Ped=target,Handle=target.Handle,Model=target.Model.Hash,At=now};Function.Call(Hash.DISPLAY_ONSCREEN_KEYBOARD,0,"FMMC_KEY_TIP8","","","","","",240);}
                 }
-                if(storyModeReady&&npcSettings.Flag("general.hints")) { if(now>=nextHint) { nextHint=now.AddSeconds(10); hintUntil=now.AddSeconds(2); } if(now<hintUntil) Screen.ShowHelpTextThisFrame("Living Los Santos: "+input.TalkPrompt(npcSettings)); }
                 if((scanCandidates.Count>0||now>=nextScan)&&metrics.HasBudget(npcSettings.Number("performance.tickBudgetMs"))) Scan(player); else if(scanCandidates.Count>0||now>=nextScan) metrics.Deferred++;
                 TickMenu(player);
                 if(!exchangePending&&now>=nextExchange) { nextExchange=now.AddSeconds(1); Exchange(player); }
@@ -139,7 +144,7 @@ namespace LivingLosSantosV2
             finally { metrics.End(); }
         }
         private bool Interactable(Ped ped,Ped player,float range)
-        { return WorldDirector.Alive(player)&&WorldDirector.Alive(ped)&&ped.Handle!=player.Handle&&ped.IsHuman&&(!ped.IsPersistent||director.IsOwned(ped))&&!ped.IsInVehicle()&&!ped.IsInCombat&&ped.Position.DistanceTo(player.Position)<=range; }
+        { return WorldDirector.Alive(player)&&WorldDirector.Alive(ped)&&ped.Handle!=player.Handle&&ped.IsHuman&&!ScriptProtected(ped)&&SafeVehicle(ped,player)&&!ped.IsInCombat&&ped.Position.DistanceTo(player.Position)<=range; }
         private string NpcId(Ped ped) { return runtimeId+":"+ped.Handle+":"+ped.Model.Hash; }
         private string EffectivePause(Ped player)
         {
@@ -151,11 +156,12 @@ namespace LivingLosSantosV2
             if(npcSettings.Flag("safety.protectMissions")&&Game.IsMissionActive) return "Story mission protected";
             string pause=WorldDirector.ScenePause(player,director.Settings);
             if((keyboardTarget!=null||nativeMenu!=null&&nativeMenu.KeyboardOpen||DateTime.UtcNow<keyboardReleasedUntil)&&pause=="Player control unavailable")return "Dialogue keyboard open";
-            return pause??(nativeMenu!=null&&nativeMenu.IsOpen?"Native menu open":null);
+            return pause??(nativeMenu!=null&&nativeMenu.IsOpen?"Native menu open":replyWheel?"Reply wheel open":null);
         }
         private void StartDialogue(Ped target,Ped player,string utterance,string command)
         {
             if(dialoguePending) { if(command!=null) Acknowledge(command,false,"Another dialogue request is pending."); return; }
+            if(!BeginTalkSession(target,player)){if(command!=null)Acknowledge(command,false,"Conversation target or turn limit is unavailable.");return;}
             NpcMemory memory=Memory(target,true);
             conversation=new ActiveJob{Ped=target,Handle=target.Handle,Model=target.Model.Hash,Epoch=sceneEpoch,NpcId=NpcId(target),Utterance=utterance,History=WorkingHistory.Snapshot(memory.History),Deadline=DateTime.UtcNow.AddSeconds(npcSettings.Number("conversation.timeoutSeconds")),RequiredFrame=sentFrame+1};
             dialoguePending=true;
@@ -165,7 +171,7 @@ namespace LivingLosSantosV2
         }
         private void UpdateScene(Ped player,string pause)
         {
-            bool hard=pause!=null&&pause!="Game paused"&&pause!="Dialogue keyboard open"&&pause!="Native menu open";
+            bool hard=pause!=null&&pause!="Game paused"&&pause!="Dialogue keyboard open"&&pause!="Native menu open"&&pause!="Reply wheel open";
             int handle=player!=null&&player.Exists()?player.Handle:0;
             if((hard&&lastHardPause!=pause)||(lastPlayerHandle!=0&&handle!=lastPlayerHandle)) {
                 sceneEpoch=Guid.NewGuid().ToString("N"); registeredEpoch=null; CancelConversation("Scene changed"); CancelKeyboard(); observedNpcs.Clear(); scanCandidates.Clear(); seen.Clear(); nextScan=DateTime.MinValue;
@@ -179,12 +185,13 @@ namespace LivingLosSantosV2
             if(!conversation.Submitted&&registeredEpoch==sceneEpoch&&acceptedFrame>=conversation.RequiredFrame&&DateTime.UtcNow>=conversation.NextSubmit) {
                 conversation.Submitted=true;
                 conversation.Attempts++;
-                var packet=new {requestId=conversation.RequestId,runtimeId=runtimeId,sceneEpoch=sceneEpoch,kind="conversation",lane="A",npcIds=new[]{conversation.NpcId},context=new{playerUtterance=conversation.Utterance,trigger="player_talk",history=conversation.History}};
+                var context=new Dictionary<string,object>{{"trigger","player_talk"},{"history",conversation.History}};if(conversation.QuickJobId!=null)context["quickReply"]=new{jobId=conversation.QuickJobId,optionId=conversation.QuickOptionId};else context["playerUtterance"]=conversation.Utterance;
+                var packet=new {requestId=conversation.RequestId,runtimeId=runtimeId,sceneEpoch=sceneEpoch,kind="conversation",lane="A",npcIds=new[]{conversation.NpcId},context=context};
                 Send("api/ai/jobs",serializer.Serialize(packet),new Completion{Job=true,Epoch=sceneEpoch,RequestId=conversation.RequestId});
             }
         }
         private bool ValidJobTarget(ActiveJob job,Ped player)
-        { return WorldDirector.Alive(player)&&job.Ped!=null&&job.Ped.Exists()&&AiUpdateGate.EntityAllowed(job.Handle,job.Model,job.Ped.Handle,job.Ped.Model.Hash,true,job.Ped.IsAlive,job.Ped.IsHuman,job.Ped.IsPersistent&&!director.IsOwned(job.Ped),job.Ped.IsInVehicle(),job.Ped.Position.DistanceTo(player.Position),npcSettings.Number("conversation.walkAwayMeters"))&&(!npcSettings.Flag("conversation.interruptOnDanger")||!job.Ped.IsInCombat&&!player.IsInCombat); }
+        { return WorldDirector.Alive(player)&&job.Ped!=null&&job.Ped.Exists()&&AiUpdateGate.EntityAllowed(job.Handle,job.Model,job.Ped.Handle,job.Ped.Model.Hash,true,job.Ped.IsAlive,job.Ped.IsHuman,ScriptProtected(job.Ped),false,job.Ped.Position.DistanceTo(player.Position),npcSettings.Number("conversation.walkAwayMeters"))&&SafeVehicle(job.Ped,player)&&(!npcSettings.Flag("conversation.interruptOnDanger")||!job.Ped.IsInCombat&&!player.IsInCombat); }
         private void CancelConversation(string reason)
         {
             ActiveJob job=conversation; conversation=null; dialoguePending=false; promptRequested=false;
@@ -201,6 +208,7 @@ namespace LivingLosSantosV2
             {
                 if(item.Job)
                 {
+                    if(item.Kind=="quickReplies"){try{ReceiveQuickJob(item);}catch(Exception ex){Log("Quick reply request rejected: "+ex.GetType().Name);quickJob=null;}continue;}
                     try
                     {
                         if(item.Error!=null) throw new InvalidOperationException(item.Error);
@@ -220,6 +228,7 @@ namespace LivingLosSantosV2
                     if(!Wire.Boolean(item.Response,"success")||Wire.Integer(item.Response,"protocol",4,4)!=4) throw new InvalidOperationException("Companion protocol4 required; update the companion before NPC AI is available.");
                     pendingEvents.RemoveAll(e=>item.EventIds.Contains((string)e["id"])); acknowledgements.RemoveAll(e=>item.AckIds.Contains((string)e["id"]));
                     aiReceipts.RemoveAll(id=>item.ReceiptIds.Contains(id)); aiOutcomes.RemoveAll(a=>item.OutcomeIds.Contains((string)a["actionId"]));
+                    if(item.MindOutcomeIds!=null)mindOutcomes.RemoveAll(a=>item.MindOutcomeIds.Contains((string)a["commitId"]));if(item.WitnessIds!=null)witnessedEvents.RemoveAll(a=>item.WitnessIds.Contains((string)a["id"]));
                     if(item.Epoch==sceneEpoch) { registeredEpoch=sceneEpoch; acceptedFrame=Math.Max(acceptedFrame,item.Frame); }
                     var config=Wire.Map(Wire.Value(item.Response,"config")); int revision=Wire.Integer(config,"revision",0,Int32.MaxValue);
                     if(revision!=appliedRevision)
@@ -227,6 +236,7 @@ namespace LivingLosSantosV2
                     var npcConfig=Wire.Map(Wire.Value(item.Response,"npcSettings"));
                     npcSettings.Apply(Wire.Integer(npcConfig,"revision",0,Int32.MaxValue),Wire.Map(Wire.Value(npcConfig,"settings")));
                     pause=EffectivePause(player); UpdateScene(player,pause);
+                    ConsumeReputation(item.Response);
                     foreach(var update in Wire.Maps(Wire.Value(item.Response,"aiUpdates")).Take(32)) ConsumeAi(update,player,pause);
                     foreach(var command in Wire.Maps(Wire.Value(item.Response,"commands")).Take(32)) Dispatch(command,player,pause);
                 }
@@ -239,12 +249,14 @@ namespace LivingLosSantosV2
             try {
                 // A fast provider can finish before its POST response reaches the game thread.
                 // Leave that update unreceipted so the companion redelivers after the job ID is known.
-                if(conversation!=null&&conversation.JobId==null) return;
+                string initialKind=Wire.Text(update,"kind",32);if((initialKind=="conversation"||initialKind=="speech")&&conversation!=null&&conversation.JobId==null||initialKind=="quickReplies"&&quickJob!=null&&quickJob.JobId==null) return;
                 id=Wire.Text(update,"id",128); string error;
                 if(!updateGate.TryClaim(update,runtimeId,sceneEpoch,DateTime.UtcNow,out error)) return;
                 string jobId=Wire.Text(update,"jobId",128),kind=Wire.Text(update,"kind",32),status=Wire.Text(update,"status",32),source=Wire.Text(update,"source",80);
-                if(conversation==null||conversation.JobId!=jobId||!ValidJobTarget(conversation,player)||pause!=null) return;
                 var payload=Wire.Map(Wire.Value(update,"payload"));
+                if(kind=="persona"||kind=="memory"){if(pause==null&&npcSettings.Flag("memory.enabled")&&(status=="completed"||status=="fallback"))ConsumeMindUpdate(update,payload,player);return;}
+                if(kind=="quickReplies"){if(status=="completed"||status=="fallback")ConsumeQuickReplies(update,payload,player);return;}
+                if(conversation==null||conversation.JobId!=jobId||!ValidJobTarget(conversation,player)||pause!=null) return;
                 if(kind=="speech") { Caption("NPC ["+ResponsePolicy.CleanText(source,40)+"]: "+ResponsePolicy.CleanText(Wire.Text(payload,"speech",800),800),6000); return; }
                 if(status=="failed"||status=="cancelled"||status=="rejected") { CancelConversation("AI job "+status+"."); return; }
                 if(kind!="conversation"||(status!="completed"&&status!="fallback")) return;
@@ -254,18 +266,20 @@ namespace LivingLosSantosV2
                 var delta=Wire.Map(Wire.Value(payload,"mindDelta"));
                 // Validate all final-state fields before applying any mental changes or GTA action.
                 var candidate=new NpcMind{Fear=memory.Mind.Fear,Aggression=memory.Mind.Aggression,Morale=memory.Mind.Morale,Trust=memory.Mind.Trust,Respect=memory.Mind.Respect,Mood=memory.Mind.Mood}; candidate.Apply(delta);
-                int factionDelta=NpcMind.Delta(delta,"factionRepDelta",20), districtDelta=NpcMind.Delta(delta,"districtRepDelta",20);
+                NpcMind.Delta(delta,"factionRepDelta",20);NpcMind.Delta(delta,"districtRepDelta",20);
                 var actions=Wire.Maps(Wire.Value(payload,"actions")).Take(9).ToArray(); if(actions.Length>8) throw new InvalidOperationException("Too many AI actions.");
                 var notes=Wire.Maps(Wire.Value(payload,"memoryEvents")).Take(4).ToArray(); if(notes.Length>3) throw new InvalidOperationException("Too many memory events.");
                 foreach(var note in notes) { Wire.Text(note,"type",40); Wire.Text(note,"text",160); }
                 string tone=Wire.Text(payload,"voiceTone",80);
                 memory.Mind.Apply(delta); memory.Mind.VoiceTone=ResponsePolicy.CleanText(tone,80);
-                if(npcSettings.Flag("reputation.enabled")) { AddReputation(factionStandings,director.Faction(conversation.Ped),factionDelta); AddReputation(districtStandings,World.GetZoneLocalizedName(player.Position),districtDelta); }
+                object commit;if(payload.TryGetValue("memoryCommitId",out commit)&&commit!=null)MindOutcome(NpcMind.RequireString(commit),jobId,conversation.NpcId,true,memory.Mind);
+                ProtectNotable(conversation.Ped);
                 foreach(var note in notes) memory.Note=ResponsePolicy.CleanText(note["text"],160);
                 memory.History.Add(new Dictionary<string,object>{{"role","player"},{"text",conversation.Utterance}}); memory.History.Add(new Dictionary<string,object>{{"role","npc"},{"text",speech}}); while(memory.History.Count>24) memory.History.RemoveAt(0);
                 foreach(var action in actions) ExecuteAiAction(action,jobId,conversation,player);
                 Caption("NPC ["+ResponsePolicy.CleanText(source,40)+"]: "+speech,10000); Emit("dialogue","NPC "+conversation.Handle+" ["+ResponsePolicy.CleanText(source,40)+"]: "+speech,null,director.Faction(conversation.Ped));
                 conversation=null; dialoguePending=false;
+                if(talkSession!=null){talkSession.Turns++;talkSession.IdleUntil=DateTime.UtcNow.AddSeconds(npcSettings.Number("conversation.timeoutSeconds"));if(talkSession.Turns>=(int)npcSettings.Number("conversation.maxTurns"))EndTalkSession("Conversation turn limit reached.",true);}
             } catch(InvalidOperationException ex) { Log("AI update rejected: "+ex.Message); CancelConversation("AI result rejected by local validation."); }
             finally { if(id!=null&&!aiReceipts.Contains(id)) { if(aiReceipts.Count>=256) aiReceipts.RemoveAt(0); aiReceipts.Add(id); } }
         }
@@ -284,9 +298,9 @@ namespace LivingLosSantosV2
                 if(executedActions.Count>=2048) throw new InvalidOperationException("Session action ledger full; reload the script to start a new session.");
                 executedActions.Add(id);
                 var parameters=Wire.Map(Wire.Value(action,"parameters")); int duration=parameters.ContainsKey("durationMs")?Wire.Integer(parameters,"durationMs",500,15000):5000;
-                message=ApplyDialogueAction(job.Ped,player,type,duration); applied=message.Length==0; if(applied) message="Game task accepted; completion is not implied.";
+                message=QueueNpcAction(job.Ped,player,type,duration,id,jobId);if(message==null)return;
             } catch(Exception ex) { message=ex is InvalidOperationException?ex.Message:"Game task failed: "+ex.GetType().Name; }
-            if(id!=null) { if(aiOutcomes.Count>=128) aiOutcomes.RemoveAt(0); aiOutcomes.Add(new Dictionary<string,object>{{"actionId",id},{"jobId",jobId},{"status",applied?"applied":"rejected"},{"message",ResponsePolicy.CleanText(message,240)}}); }
+            RecordActionOutcome(id,jobId,applied,message);
         }
         private void Dispatch(Dictionary<string,object> command,Ped player,string pause)
         {
@@ -296,7 +310,7 @@ namespace LivingLosSantosV2
                 id=Wire.Text(command,"id",128); string error;
                 if(!commands.TryClaim(command,runtimeId,DateTime.UtcNow,out error)) { if(error!=null) Acknowledge(id,false,error); return; }
                 string type=Wire.Text(command,"type",32); var payload=Wire.Map(Wire.Value(command,"payload"));
-                if(type=="clear_events") { director.Clear("Cleared from the live portal"); Acknowledge(id,true,"Owned encounters cleared."); return; }
+                if(type=="clear_events") { director.Clear("Cleared from the live portal"); ClearNpcActions("Cleared from the live portal"); Acknowledge(id,true,"Owned encounters cleared."); return; }
                 if(pause!=null||!WorldDirector.Alive(player)) { Acknowledge(id,false,pause??"Player unavailable."); return; }
                 if(type=="start_turf_war") { error=director.StartTurf(player,Wire.Text(payload,"districtId",32),Wire.Text(payload,"attacker",32),id,Wire.Timestamp(command,"expiresAt")); if(error!=null) Acknowledge(id,false,error); return; }
                 if(type=="start_street_fight") { error=director.StartStreet(player,id,Wire.Timestamp(command,"expiresAt")); if(error!=null) Acknowledge(id,false,error); return; }
@@ -327,7 +341,7 @@ namespace LivingLosSantosV2
                 foreach(string id in seen.Where(s=>now-s.Value.At>TimeSpan.FromSeconds(5)).Select(s=>s.Key).ToArray()) seen.Remove(id);
                 observedNpcs.RemoveAll(n=>!seen.ContainsKey((string)n["id"]));
                 var nearby=World.GetNearbyPeds(player,75).Where(p=>p.Exists()&&p.IsHuman&&p.Handle!=player.Handle);
-                var all=director.Peds.Where(p=>p.Exists).Select(p=>p.Ped).Concat(nearby).GroupBy(p=>p.Handle).Select(g=>g.First()).OrderBy(p=>conversation!=null&&p.Handle==conversation.Handle?0:1).ThenBy(p=>p.Position.DistanceToSquared(player.Position)).Take(Math.Min(32,(int)npcSettings.Number("performance.trackedNpcCap")));
+                var all=director.Peds.Where(p=>p.Exists).Select(p=>p.Ped).Concat(ActionPeds).Concat(nearby).GroupBy(p=>p.Handle).Select(g=>g.First()).OrderBy(p=>conversation!=null&&p.Handle==conversation.Handle?0:1).ThenBy(p=>p.Position.DistanceToSquared(player.Position)).Take(Math.Min(32,(int)npcSettings.Number("performance.trackedNpcCap")));
                 foreach(Ped ped in all) scanCandidates.Enqueue(ped);
                 lastScanStarted=now; nextScan=now.AddSeconds(1/Math.Max(1,npcSettings.Number("performance.scansPerSecond")));
             }
@@ -351,10 +365,11 @@ namespace LivingLosSantosV2
             foreach(var npc in npcs) { NpcMemory memory; if(memories.TryGetValue((int)npc["handle"],out memory)) { npc["mind"]=memory.Mind.Snapshot(); npc["fear"]=memory.Mind.Fear; npc["aggression"]=memory.Mind.Aggression; npc["morale"]=memory.Mind.Morale; npc["memory"]=memory.Note; npc["longTermMemory"]=memory.Note; } }
             var events=pendingEvents.Take(50).ToArray(); var acks=acknowledgements.Take(50).ToArray();
             var receipts=aiReceipts.Take(64).ToArray(); var outcomes=aiOutcomes.Take(32).ToArray();
+            var mindAcks=mindOutcomes.Take(32).ToArray();var witnesses=witnessedEvents.Take(16).ToArray();
             var packet=new Dictionary<string,object>{{"protocol",4},{"runtimeId",runtimeId},{"sceneEpoch",sceneEpoch},{"pluginVersion",PluginVersion},{"gameVersion",compatibility.GameFileVersion},{"sdkGameVersion",Game.FileVersion.ToString()},
                 {"appliedRevision",Math.Max(0,appliedRevision)},{"player",available?DescribePlayer(player):null},{"environment",available?DescribeEnvironment(player):null},
                 {"npcs",npcs.ToArray()},{"director",director.Snapshot()},{"events",events},{"acknowledgements",acks},{"appliedNpcRevision",Math.Max(0,npcSettings.Revision)},
-                {"aiReceipts",receipts},{"aiOutcomes",outcomes},{"compatibility",compatibility.Snapshot(Game.FileVersion.ToString())},{"tickMetrics",metrics.Snapshot()},{"inputDevice",input.Controller?"controller":"keyboard"}};
+                {"aiReceipts",receipts},{"aiOutcomes",outcomes},{"aiMindOutcomes",mindAcks},{"witnessedEvents",witnesses},{"appliedMemoryRevision",appliedMemoryRevision},{"appliedReputationRevision",appliedReputationRevision},{"compatibility",compatibility.Snapshot(Game.FileVersion.ToString())},{"tickMetrics",metrics.Snapshot()},{"inputDevice",input.Controller?"controller":"keyboard"}};
             string json=serializer.Serialize(packet);
             // The server's limit is UTF-8 bytes, while JavaScriptSerializer limits characters.
             // Keep unsent acknowledgements/events queued; send a smaller observed NPC subset if required.
@@ -363,20 +378,22 @@ namespace LivingLosSantosV2
                 if(events.Length>0) { events=events.Take(events.Length/2).ToArray(); packet["events"]=events; }
                 else if(acks.Length>0) { acks=acks.Take(acks.Length/2).ToArray(); packet["acknowledgements"]=acks; }
                 else if(outcomes.Length>0) { outcomes=outcomes.Take(outcomes.Length/2).ToArray(); packet["aiOutcomes"]=outcomes; }
+                else if(mindAcks.Length>0) { mindAcks=mindAcks.Take(mindAcks.Length/2).ToArray();packet["aiMindOutcomes"]=mindAcks; }
+                else if(witnesses.Length>0) { witnesses=witnesses.Take(witnesses.Length/2).ToArray();packet["witnessedEvents"]=witnesses; }
                 else if(receipts.Length>0) { receipts=receipts.Take(receipts.Length/2).ToArray(); packet["aiReceipts"]=receipts; }
                 else if(npcs.Count>0) { npcs.RemoveAt(npcs.Count-1); packet["npcs"]=npcs.ToArray(); }
                 else throw new InvalidOperationException("World snapshot exceeded the local exchange budget.");
                 json=serializer.Serialize(packet);
             }
             exchangePending=true;
-            Send("api/runtime/exchange",json,new Completion{Frame=++sentFrame,Epoch=sceneEpoch,EventIds=events.Select(e=>(string)e["id"]).ToArray(),AckIds=acks.Select(e=>(string)e["id"]).ToArray(),ReceiptIds=receipts,OutcomeIds=outcomes.Select(a=>(string)a["actionId"]).ToArray()});
+            Send("api/runtime/exchange",json,new Completion{Frame=++sentFrame,Epoch=sceneEpoch,EventIds=events.Select(e=>(string)e["id"]).ToArray(),AckIds=acks.Select(e=>(string)e["id"]).ToArray(),ReceiptIds=receipts,OutcomeIds=outcomes.Select(a=>(string)a["actionId"]).ToArray(),MindOutcomeIds=mindAcks.Select(a=>(string)a["commitId"]).ToArray(),WitnessIds=witnesses.Select(a=>(string)a["id"]).ToArray()});
         }
         private Dictionary<string,object> Describe(Ped ped)
         {
             NpcMemory memory=Memory(ped,true); string faction=director.Faction(ped); int damage=Math.Max(0,memory.LastHealth-ped.Health); memory.LastHealth=ped.Health;
-            return new Dictionary<string,object>{{"id",NpcId(ped)},{"handle",ped.Handle},{"name",(faction=="Civilian/Unknown"?"Pedestrian":faction)+" "+ped.Handle},{"faction",faction},{"factionVerified",faction!="Civilian/Unknown"},
+            return new Dictionary<string,object>{{"id",NpcId(ped)},{"handle",ped.Handle},{"name",SpeakerName(ped)},{"faction",faction},{"factionVerified",faction!="Civilian/Unknown"},
                 {"archetype",faction=="Civilian/Unknown"?"Nearby pedestrian; affiliation unknown":"Observed "+faction+" pedestrian"},{"position",Position(ped.Position)},{"health",ped.Health},{"alive",ped.IsAlive},
-                {"modelHash",ped.Model.Hash},{"inCombat",ped.IsInCombat},{"owned",director.IsOwned(ped)},{"weapon",ped.Weapons.Current==null?"Unarmed":ped.Weapons.Current.Hash.ToString()},{"memory",memory.Note},
+                {"modelHash",ped.Model.Hash},{"identity",ObserveIdentity(ped,memory)},{"inVehicle",ped.IsInVehicle()},{"availableActions",AvailableActions(ped,Game.Player.Character)},{"inCombat",ped.IsInCombat},{"owned",ModOwns(ped)},{"weapon",ped.Weapons.Current==null?"Unarmed":ped.Weapons.Current.Hash.ToString()},{"memory",memory.Note},
                 {"mind",memory.Mind.Snapshot()},{"fear",memory.Mind.Fear},{"aggression",memory.Mind.Aggression},{"morale",memory.Mind.Morale},{"longTermMemory",memory.Note},
                 {"recentDamage",Math.Min(10000,damage)},{"recentEvents",damage>0?new[]{"Observed health loss: "+damage}:new string[0]},{"distance",ped.Position.DistanceTo(Game.Player.Character.Position)}};
         }
@@ -424,20 +441,10 @@ namespace LivingLosSantosV2
         private void Acknowledge(string id,bool applied,string message)
         { acknowledgements.RemoveAll(a=>(string)a["id"]==id); if(acknowledgements.Count>=128) acknowledgements.RemoveAt(0); acknowledgements.Add(new Dictionary<string,object>{{"id",id},{"status",applied?"applied":"rejected"},{"message",ResponsePolicy.CleanText(message,240)}}); }
         private void Caption(string message,int duration) { if(director!=null&&director.Settings.subtitles) Screen.ShowSubtitle("LLS: "+message,duration); }
-        private string ApplyDialogueAction(Ped target,Ped player,string action,int duration)
-        {
-            if(!ResponsePolicy.IsSupportedAction(action)) return "Dialogue suggestion; no game action";
-            if(action=="SURRENDER") target.Task.HandsUp(duration);
-            else if(action=="FLEE_PANICKED") target.Task.FleeFrom(player,35,duration);
-            else if(action=="TAKE_COVER") Function.Call(Hash.TASK_SEEK_COVER_FROM_PED,target.Handle,player.Handle,duration,false);
-            else if(action=="ATTACK_MELEE") { RememberWeapon(target,duration); target.Weapons.Select(WeaponHash.Unarmed,true); target.Task.CombatTimed(player,duration,TaskCombatFlags.PreventChangingTarget); }
-            else if(action=="DRAW_WEAPON") { Weapon weapon=target.Weapons.BestWeapon; if(weapon==null||weapon.Hash==WeaponHash.Unarmed) return "No existing weapon to draw"; RememberWeapon(target,duration); target.Weapons.Select(weapon); target.Task.AimGunAtEntity(player,duration,false); }
-            else if(action=="INTIMIDATE") target.Task.LookAt(player,duration); else target.Task.TurnTo(player,Math.Min(3000,duration)); return "";
-        }
-        private void RememberWeapon(Ped ped,int duration)
-        { var old=weaponLeases.FirstOrDefault(x=>x.Handle==ped.Handle&&x.Model==ped.Model.Hash); if(old!=null) { old.Until=DateTime.UtcNow.AddMilliseconds(duration); return; } if(weaponLeases.Count>=16) throw new InvalidOperationException("Temporary weapon lease limit reached."); weaponLeases.Add(new WeaponLease{Ped=ped,Handle=ped.Handle,Model=ped.Model.Hash,Original=ped.Weapons.Current==null?WeaponHash.Unarmed:ped.Weapons.Current.Hash,Until=DateTime.UtcNow.AddMilliseconds(duration)}); }
+        private void RememberWeapon(Ped ped,int duration,WeaponHash selected)
+        { var old=weaponLeases.FirstOrDefault(x=>x.Handle==ped.Handle&&x.Model==ped.Model.Hash); if(old!=null) { old.Until=DateTime.UtcNow.AddMilliseconds(duration); old.Selected=selected; return; } if(weaponLeases.Count>=16) throw new InvalidOperationException("Temporary weapon lease limit reached."); weaponLeases.Add(new WeaponLease{Ped=ped,Handle=ped.Handle,Model=ped.Model.Hash,Original=ped.Weapons.Current==null?WeaponHash.Unarmed:ped.Weapons.Current.Hash,Selected=selected,Until=DateTime.UtcNow.AddMilliseconds(duration)}); }
         private void RestoreWeapons(bool all)
-        { foreach(var lease in weaponLeases.ToArray()) if(all||DateTime.UtcNow>=lease.Until||!lease.Ped.Exists()) { try { if(lease.Ped.Exists()&&lease.Ped.Handle==lease.Handle&&lease.Ped.Model.Hash==lease.Model&&lease.Ped.IsAlive) lease.Ped.Weapons.Select(lease.Original,true); } finally { weaponLeases.Remove(lease); } } }
+        { foreach(var lease in weaponLeases.ToArray()) if(all||DateTime.UtcNow>=lease.Until||!lease.Ped.Exists()) { try { if(lease.Ped.Exists()&&lease.Ped.Handle==lease.Handle&&lease.Ped.Model.Hash==lease.Model&&lease.Ped.IsAlive&&lease.Ped.Weapons.Current!=null&&lease.Ped.Weapons.Current.Hash==lease.Selected) lease.Ped.Weapons.Select(lease.Original,true); } finally { weaponLeases.Remove(lease); } } }
         private void SaveCampaign()
         {
             if(campaign==null||director==null) return;
@@ -457,8 +464,10 @@ namespace LivingLosSantosV2
             if(stopping) return;
             stopping=true; storyModeReady=false; promptRequested=false;
             CancelConversation("Script unloading");
+            try{EndTalkSession("Script unloading",false);}catch{}
             try { CancelKeyboard(); } catch { }
             try { if(nativeMenu!=null)nativeMenu.Close(); } catch { }
+            try { ClearNpcActions("Script unloading"); ReleaseNotables(true); } catch { }
             try { RestoreWeapons(true); } catch { Log("A temporary weapon selection could not be restored during abort."); }
             try { director.Dispose(); SaveCampaign(); } catch(Exception ex) { Log("Abort cleanup: "+ex.GetType().Name); }
             cancellation.Cancel(); transport.Dispose(); Completion item; while(completed.TryDequeue(out item)) {}
@@ -466,3 +475,4 @@ namespace LivingLosSantosV2
         }
     }
 }
+

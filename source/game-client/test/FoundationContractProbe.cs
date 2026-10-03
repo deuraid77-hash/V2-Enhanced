@@ -20,7 +20,7 @@ internal static class FoundationContractProbe
             var frame=new Dictionary<string,object>{{"protocol",4},{"runtimeId",runtime},{"sceneEpoch",epoch},{"pluginVersion","4.0.0-contract-probe-NO-GTA"},{"gameVersion","0.0.0.0"},{"sdkGameVersion","0.0.0.0"},{"appliedRevision",0},{"appliedNpcRevision",0},
                 {"player",new{position=new{x=100,y=-1940,z=20},wantedLevel=0,weaponDrawn=false,weaponDrawnName="Unarmed",stance="Casual",factionStandings=new Dictionary<string,int>{{"Ballas",0}}}},
                 {"environment",new{weather="Clear",timeOfDay="12:00",district="QA fixture",nearbyGunfire=false}},{"npcs",new[]{npc}},
-                {"director",new{enabled=false,pausedReason="QA fixture: no GTA observations",settings=new DirectorSettings().Snapshot(),activeEvents=new object[0],territories=WorldRules.Territories().Select(t=>t.Snapshot()).ToArray(),ownedPedCount=0}},
+                {"director",new{enabled=false,pausedReason=(string)null,settings=new DirectorSettings().Snapshot(),activeEvents=new object[0],territories=WorldRules.Territories().Select(t=>t.Snapshot()).ToArray(),ownedPedCount=0}},
                 {"events",new object[0]},{"acknowledgements",new object[0]},{"aiReceipts",new string[0]},{"aiOutcomes",new object[0]}};
             using(var transport=new DashboardTransport(uri.AbsoluteUri)) {
                 Func<Dictionary<string,object>> exchange=()=>transport.PostAsync("api/runtime/exchange",json.Serialize(frame),CancellationToken.None).GetAwaiter().GetResult();
@@ -58,3 +58,4 @@ internal static class FoundationContractProbe
         } catch(Exception ex) {Console.Error.WriteLine(ex.GetType().Name+": "+ex.Message); return 1;}
     }
 }
+

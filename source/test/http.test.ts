@@ -86,16 +86,19 @@ test('real HTTP companion routes: telemetry, origin protection, offline transpar
       assert.equal((await chat.json()).text, undefined);
       assert.equal((await post('/api/chatbot', { messages: 'invalid' })).status, 400);
     });
-    await t.test('memory persistence is local to the configured companion directory', async () => {
+    await t.test('legacy browser memory insertion is retired and writes nothing', async () => {
+      // Step 3 (MIND-CONTRACT.md): arbitrary browser incident insertion was retired in favour of observed protocol 4 memory.
       const recorded = await post('/api/memory/record', { npcId: 'npc-42', incident: { summary: 'test encounter' } });
-      assert.equal(recorded.status, 200);
-      const all = await (await fetch(base + '/api/memory/all')).json();
-      assert.equal(all.memories['npc-42'].totalEncounters, 1);
-      const contents = fs.readFileSync(path.join(data, 'npc-memories.json'), 'utf8');
-      assert.equal(contents.includes('test encounter'), true);
-      assert.equal(contents.includes('fake-test-credential'), false);
-      assert.equal((await post('/api/memory/record', { npcId: '../escape' })).status, 400);
-      assert.equal((await fetch(base + '/api/memory/clear', { method: 'DELETE' })).status, 200);
+      assert.equal(recorded.status, 410);
+      assert.equal((await recorded.json()).code, 'legacy_memory_retired');
+      assert.equal((await post('/api/memory/record', { npcId: '../escape' })).status, 410);
+      assert.equal((await fetch(base + '/api/memory/clear', { method: 'DELETE' })).status, 410);
+      assert.equal(fs.existsSync(path.join(data, 'npc-memories.json')), false);
+      const all = await fetch(base + '/api/memory/all');
+      assert.equal(all.status, 200);
+      const raw = await all.text();
+      assert.equal(raw.includes('test encounter'), false);
+      assert.equal(raw.includes('fake-test-credential'), false);
     });
   } finally {
     server.closeAllConnections();

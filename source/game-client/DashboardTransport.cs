@@ -50,6 +50,12 @@ namespace LivingLosSantosV2
         public static bool MenuRouteAllowed(string method,string route)
         {
             if(route==null||route.Length>512)return false;
+            if(method=="GET"&&(route=="api/ptt/devices"||route=="api/ptt/status"||route=="api/memory/reputation"))return true;
+            if(method=="POST"&&(route=="api/ptt/captures"||route=="api/memory/reset"))return true;
+            Guid scopedId;Match capture=Regex.Match(route,@"^api/ptt/captures/([a-fA-F0-9-]{36})(?:/(lease|stop|result))?$");
+            if(capture.Success&&Guid.TryParse(capture.Groups[1].Value,out scopedId))return capture.Groups[2].Value=="result"?method=="GET":capture.Groups[2].Value=="lease"||capture.Groups[2].Value=="stop"?method=="POST":method=="GET"||method=="DELETE";
+            Match memory=Regex.Match(route,@"^api/memory/npcs/([a-fA-F0-9-]{36})$");if(memory.Success&&Guid.TryParse(memory.Groups[1].Value,out scopedId))return method=="GET";
+            if(method=="GET"&&Regex.IsMatch(route,@"^api/memory/all\?offset=\d{1,5}&limit=(5|10|25)$"))return true;
             if(method=="GET"&&(route=="api/settings"||route=="api/settings?catalog=false"||route=="api/profiles"||route=="api/ai/status"))return true;
             if(method=="PATCH"&&(route=="api/settings"||route=="api/world/config"||route=="api/world/config?compact=true"))return true;
             if(method=="POST"&&(route=="api/profiles"||route=="api/profiles/import"||route=="api/settings/reset"||route=="api/ai/menu/jobs"||route=="api/diagnostics/export"))return true;

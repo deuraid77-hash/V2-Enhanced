@@ -5,15 +5,18 @@ import { Badge, BattleList, CityMap, CommandHistory, ConnectionCard, Empty, Even
 import { AiUsagePanel, NpcSettingsPanel } from './components/NpcFoundation';
 import { ProfilesPanel } from './components/ProfilesPanel';
 import { SettingsAdvisor } from './components/SettingsAdvisor';
+import { MemoryPanel } from './components/MemoryPanel';
+import { PttPanel } from './components/PttPanel';
 import { useCompanionResource, type AiStatus, type SettingsSnapshot } from './lib/npc-companion';
-type Tab = 'city' | 'territories' | 'npcs' | 'settings' | 'npc-settings' | 'usage' | 'profiles' | 'advisor' | 'connection';
-const tabs: { id: Tab; label: string; icon: React.ComponentType<{ size?: number }> }[] = [{ id: 'city', label: 'Live city', icon: MapIcon }, { id: 'territories', label: 'Gang territories', icon: Flag }, { id: 'npcs', label: 'NPCs & dialogue', icon: MessageSquare }, { id: 'settings', label: 'Director settings', icon: SlidersHorizontal }, { id: 'npc-settings', label: 'NPC settings', icon: Settings2 }, { id: 'profiles', label: 'Profiles', icon: FolderHeart }, { id: 'advisor', label: 'Settings advisor', icon: Sparkles }, { id: 'usage', label: 'AI usage & status', icon: Activity }, { id: 'connection', label: 'Connection', icon: Radio }];
+type Tab = 'city' | 'territories' | 'npcs' | 'settings' | 'npc-settings' | 'usage' | 'profiles' | 'advisor' | 'memory' | 'connection';
+const tabs: { id: Tab; label: string; icon: React.ComponentType<{ size?: number }> }[] = [{ id: 'city', label: 'Live city', icon: MapIcon }, { id: 'territories', label: 'Gang territories', icon: Flag }, { id: 'npcs', label: 'NPCs & dialogue', icon: MessageSquare }, { id: 'settings', label: 'Director settings', icon: SlidersHorizontal }, { id: 'npc-settings', label: 'NPC settings', icon: Settings2 }, { id: 'profiles', label: 'Profiles', icon: FolderHeart }, { id: 'advisor', label: 'Settings advisor', icon: Sparkles }, { id: 'memory', label: 'Memory & reputation', icon: Users }, { id: 'usage', label: 'AI usage & status', icon: Activity }, { id: 'connection', label: 'Connection', icon: Radio }];
 const copy: Record<Tab, [string, string, string]> = {
   city: ['LOS SANTOS / OPERATIONS', 'The streets are alive.', 'Your window into the world. Every marker, encounter and update comes from the game.'],
   territories: ['TERRITORY CONTROL', 'Every block has a side.', 'Follow the balance of power. Turf changes hands when an in-game battle reaches its outcome.'],
   npcs: ['PEOPLE OF LOS SANTOS', 'Meet the neighborhood.', 'Talk to a streamed NPC. Dialogue is delivered through the game, where distance and context matter.'],
   settings: ['WORLD DIRECTOR', 'Set the city’s pulse.', 'Shape the frequency and intensity of street encounters. The game confirms when your settings take effect.'],
   'npc-settings': ['NPC SYSTEMS / SHARED SETTINGS', 'Give the city character.', 'Search the companion’s settings catalogue. Saved revisions are shared with the native game menu.'],
+  memory: ['PEOPLE / MEMORY & REPUTATION', 'The city remembers.', 'Read actual companion records, inspect NPC personas and follow the reputation earned through acknowledged interactions.'],
   profiles: ['SAVED CONFIGURATIONS', 'Your city, your way.', 'Preview, save and share complete NPC and world settings. Both settings revisions are checked before applying.'],
   advisor: ['SETTINGS / AI ADVISOR', 'A little local advice.', 'Turn a wish into a reviewed settings proposal. You choose which changes take effect.'],
   usage: ['AI OPERATIONS / MEASURED USAGE', 'Know what the AI is doing.', 'Actual provider jobs, token counts, queue state and estimated spending from the local companion.'],
@@ -78,6 +81,8 @@ export default function App() {
       <div hidden={tab !== 'npc-settings'}><NpcSettingsPanel companionFresh={world.streamFresh} now={now} resource={npcSettings} aiResource={aiResource} world={snapshot} gameFresh={gameFresh} onExplain={key => { setRequestedSetting({ key, sequence: Date.now() }); setTab('advisor'); }} /></div>
       <div hidden={tab !== 'profiles'}><ProfilesPanel settings={npcSettings} companionFresh={world.streamFresh} now={now} /></div>
       <div hidden={tab !== 'advisor'}><SettingsAdvisor settings={npcSettings} companionFresh={world.streamFresh} now={now} requestedSetting={requestedSetting} /></div>
+      {tab === 'memory' && <MemoryPanel companionFresh={world.streamFresh} now={now} />}
+      {tab === 'connection' && <PttPanel settings={npcSettings} companionFresh={world.streamFresh} now={now} />}
       {tab === 'usage' && <AiUsagePanel now={now} resource={aiResource} />}
       <footer className="footer"><span>LIVING LOS SANTOS <b>4</b><i />ENHANCED WORLD DIRECTOR</span><span>{online ? 'Observed world · live connection' : 'Local companion · awaiting live world'}</span></footer></main></div></div>;
 }

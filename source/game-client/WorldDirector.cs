@@ -48,6 +48,7 @@ namespace LivingLosSantosV2
         { emit=events; acknowledge=ack; persist=save; }
         public IEnumerable<OwnedPed> Peds { get { return encounters.SelectMany(e=>e.Peds); } }
         public int OwnedCount { get { return Peds.Count(p=>p.Exists); } }
+        public Func<int> ExternalPedCount=()=>0;
         public bool IsOwned(Ped ped) { return ped!=null && Peds.Any(p=>p.Handle==ped.Handle && p.Model==ped.Model.Hash && p.Exists); }
         public string Faction(Ped ped)
         {
@@ -68,7 +69,7 @@ namespace LivingLosSantosV2
             persist();
         }
         public void Toggle() { var value=DirectorSettings.Parse(Settings.Snapshot()); value.enabled=!value.enabled; Apply(value); emit("director",value.enabled?"Street director enabled":"Street director disabled",null,null); }
-        private static string[] ModelNames(string faction)
+        internal static string[] ModelNames(string faction)
         {
             if(faction=="Families") return new[]{"g_m_y_famca_01","g_m_y_famdnf_01","g_m_y_famfor_01"};
             if(faction=="Ballas") return new[]{"g_m_y_ballaeast_01","g_m_y_ballaorig_01","g_m_y_ballasout_01"};
@@ -98,7 +99,7 @@ namespace LivingLosSantosV2
             if(pause!=null)
             {
                 // Ending owned encounters prevents combat spilling into a cutscene, mission or interior.
-                if(pause!="Game paused"&&pause!="Dialogue keyboard open"&&pause!="Native menu open") Clear("Scene changed: "+pause);
+                if(pause!="Game paused"&&pause!="Dialogue keyboard open"&&pause!="Native menu open"&&pause!="Reply wheel open") Clear("Scene changed: "+pause);
                 else foreach(Encounter e in encounters) { e.Started=e.Started.AddMilliseconds(250); e.StateAt=e.StateAt.AddMilliseconds(250); }
                 return;
             }
@@ -161,7 +162,7 @@ namespace LivingLosSantosV2
             string pause=ScenePause(player,Settings); if(pause!=null) return pause+".";
             if(encounters.Count>=Settings.maxActiveEvents) return "Active event limit reached.";
             if(encounters.Any(e=>e.Center.DistanceTo(center)<45)) return "Another encounter is too close to this scene.";
-            int free=Settings.maxSpawnedPeds-encounters.Sum(e=>e.Planned);
+            int free=Settings.maxSpawnedPeds-encounters.Sum(e=>e.Planned)-ExternalPedCount();
             int team=type=="turf_war"?Math.Min(Settings.gangAggression>=70?4:3,free/2):1;
             if(free<2 || (type=="turf_war"&&team<2)) return "Owned pedestrian limit reached.";
             int witnesses=Settings.civilianPanic>0 && free>team*2?1:0;

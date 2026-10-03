@@ -5,7 +5,7 @@ export type SettingsGetter = () => AiSettings;
 export type ProviderUsage = { inputTokens: number; outputTokens: number; cachedTokens: number; thoughtTokens: number; totalTokens: number; estimated: boolean };
 export const ZERO_USAGE: ProviderUsage = Object.freeze({ inputTokens: 0, outputTokens: 0, cachedTokens: 0, thoughtTokens: 0, totalTokens: 0, estimated: false });
 export type AiScope = { runtimeId: string; sceneEpoch: string; npcIds: string[] };
-export type AiJobKind = 'conversation' | 'director' | 'bank' | 'summary' | 'advice' | 'persona' | 'quickReplies' | 'explain';
+export type AiJobKind = 'conversation' | 'director' | 'bank' | 'summary' | 'gossip' | 'advice' | 'persona' | 'quickReplies' | 'explain';
 export type AiStatus = 'queued' | 'running' | 'streaming' | 'completed' | 'cancelled' | 'rejected' | 'failed' | 'fallback';
 export type ProviderModel = { id: string; available: boolean | null; structuredOutput: boolean; streaming: boolean };
 export type StructuredRequest = { model: string; system: string; prompt: string; schema: Record<string, unknown>; maxOutputTokens: number; signal: AbortSignal; onText?: (text: string) => void };

@@ -209,6 +209,8 @@ group('Controls','game','controls',[
 group('Safety and performance','game','safety',[
   ['pauseInInteriors',true,'Pause risky tasks in interiors. Mission and cutscene guards still apply.'],
   ['protectMissions',true,'Never start NPC interventions in protected Story missions.'],
+  ['allowPoliceResponse',true,'Allow a validated NPC emergency call to raise wanted level only after an observed eligible crime.'],
+  ['maxPoliceResponseWanted',1,'Maximum wanted level an NPC emergency call may introduce. Zero keeps the call animation without raising wanted level; an existing higher level is never lowered.',[0,2]],
   ['maxOwnedVehicles',2,'Hard cap on vehicles created by the overhaul.',[0,3]],
 ]);
 group('Safety and performance','game','performance',[
@@ -219,6 +221,15 @@ group('Safety and performance','game','performance',[
 
 export const SETTINGS_CATALOG: readonly SettingDefinition[] = Object.freeze(catalog.map(entry => Object.freeze(entry)));
 export const DEFAULT_NPC_SETTINGS: Readonly<NpcSettings> = Object.freeze(Object.fromEntries(SETTINGS_CATALOG.map(s => [s.key,s.default])));
+// These are the only fields absent from the complete Step 2 V4 snapshot.
+// Permit this exact additive migration, never arbitrary partial saved state.
+export const STEP3_ADDED_SETTINGS = ['safety.allowPoliceResponse','safety.maxPoliceResponseWanted'] as const;
+export function migrateSavedNpcSettings(value: unknown): NpcSettings {
+  const parsed=validateNpcSettings(value,true);
+  const missing=SETTINGS_CATALOG.filter(s=>!Object.hasOwn(parsed,s.key)).map(s=>s.key);
+  if(missing.length&&!(missing.length===STEP3_ADDED_SETTINGS.length&&STEP3_ADDED_SETTINGS.every(key=>missing.includes(key)))) throw new Error('Incomplete saved settings snapshot.');
+  return validateNpcSettings({...DEFAULT_NPC_SETTINGS,...parsed},false);
+}
 const byKey = new Map(SETTINGS_CATALOG.map(s => [s.key,s]));
 export function validateNpcSettings(value: unknown, partial = true): NpcSettings {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new Error('Settings must be an object.');

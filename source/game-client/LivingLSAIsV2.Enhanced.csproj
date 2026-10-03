@@ -9,8 +9,9 @@
     <Reference Include="System"/><Reference Include="System.Core"/><Reference Include="System.Windows.Forms"/>
     <Reference Include="System.Net.Http"/><Reference Include="System.Web.Extensions"/><Reference Include="System.Drawing"/>
     <Reference Include="ScriptHookVDotNet3"><HintPath>$(GameRoot)\ScriptHookVDotNet3.dll</HintPath><Private>False</Private></Reference>
-    <Compile Include="MenuPolicy.cs"/><Compile Include="NativeMenu.cs"/><Compile Include="MenuBridge.cs"/><Compile Include="SettingsCatalog.Generated.cs"/><Compile Include="FoundationPolicy.cs"/><Compile Include="RuntimeCompatibility.cs"/><Compile Include="InputRouter.cs"/><Compile Include="WorldPolicy.cs"/><Compile Include="WorldDirector.cs"/><Compile Include="ResponsePolicy.cs"/><Compile Include="DashboardTransport.cs"/><Compile Include="LivingLSAIsV2.Enhanced.cs"/>
+    <Compile Include="MenuPolicy.cs"/><Compile Include="NativeMenu.cs"/><Compile Include="MenuBridge.cs"/><Compile Include="SettingsCatalog.Generated.cs"/><Compile Include="FoundationPolicy.cs"/><Compile Include="RuntimeCompatibility.cs"/><Compile Include="InputRouter.cs"/><Compile Include="WorldPolicy.cs"/><Compile Include="WorldDirector.cs"/><Compile Include="ActionPolicy.cs" /><Compile Include="NpcActions.cs" /><Compile Include="MindBridge.cs" /><Compile Include="MindPolicy.cs" /><Compile Include="ConversationPolicy.cs" /><Compile Include="ConversationUI.cs" /><Compile Include="PttBridge.cs" /><Compile Include="ResponsePolicy.cs"/><Compile Include="DashboardTransport.cs"/><Compile Include="LivingLSAIsV2.Enhanced.cs"/>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
 </Project>
+
 

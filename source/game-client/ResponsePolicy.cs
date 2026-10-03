@@ -37,9 +37,7 @@ namespace LivingLosSantosV2
 
         public static bool IsSupportedAction(string action)
         {
-            return action == "TALK_CASUAL" || action == "INTIMIDATE"
-                || action == "SURRENDER" || action == "FLEE_PANICKED" || action == "TAKE_COVER"
-                || action == "DRAW_WEAPON" || action == "ATTACK_MELEE";
+            return ActionPolicy.Known(action);
         }
 
         public static string SourceLabel(Dictionary<string, object> response)

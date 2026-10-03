@@ -24,7 +24,7 @@ export function installAiRoutes(app: express.Express, service: AiService, world:
       const result = world.exchange({ ...req.body, protocol: 3 });
       service.observe(frame);
       onTelemetry(req.body);
-      const response = { ...result, protocol: 4, npcSettings: settings.snapshot(), aiUpdates: service.deliveries(), capabilities: { protocol: 4, legacyProtocol: 3, ai: ['conversation'], audio: false } };
+      const response = { ...result, protocol: 4, npcSettings: settings.snapshot(), aiUpdates: service.deliveries(),reputationSnapshot:service.memory.reputation(),storeEpoch:String(service.memory.epoch), capabilities: { protocol: 4, legacyProtocol: 3, ai: ['conversation','quickReplies','persona','memory','gossip'], audio: false } };
       // Keep undelivered updates in memory until acknowledged. The native HTTP
       // reader accepts at most 64 KiB, even though uploads permit 128 KiB.
       while (response.aiUpdates.length && Buffer.byteLength(JSON.stringify(response), 'utf8') > 60 * 1024) response.aiUpdates.pop();

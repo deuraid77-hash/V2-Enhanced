@@ -10,3 +10,5 @@ data/
 game-client/bin/
 game-client/obj/
 *.user
+audio-host/vendor/
+audio-host/bin/

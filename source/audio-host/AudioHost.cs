@@ -6,8 +6,8 @@ using System.Web.Script.Serialization;
 
 namespace LivingLosSantos.Audio
 {
-    // This foundation executable never opens playback/capture devices. Device support is
-    // gated separately and is advertised only after implemented and measured.
+    // External helper: enumeration is read-only; capture starts only for an explicit
+    // scoped held-input request. Playback remains unavailable until its own gate.
     public static class AudioHost
     {
         private const int MaxMessageCharacters = 262144;
@@ -20,7 +20,7 @@ namespace LivingLosSantos.Audio
             Console.OutputEncoding = new UTF8Encoding(false);
             if (args.Length == 1 && args[0] == "--self-test") return SelfTest();
             if (args.Length != 0) return 2;
-            try {
+            using(var captureEngine=new CaptureEngine()) try {
                 for (;;) {
                     string line = ReadBoundedLine();
                     if (line == null) return 0; // Companion stdin EOF ends helper lifecycle.
@@ -32,8 +32,13 @@ namespace LivingLosSantos.Audio
                         id = Field(request, "requestId"); type = Field(request, "type");
                         if (!Identifier.IsMatch(id) || !Identifier.IsMatch(type)) throw new InvalidOperationException();
                         if (type == "capabilities") Reply(new { requestId=id, type=type, success=true, capabilities=new {
-                            protocol=1, version="4.0.0-foundation", playback=false, capture=false,
-                            offlineSpeech=false, spatialMixing=false, stage="foundation-policy-tested" } });
+                            protocol=1, version="4.0.0-held-capture", playback=false, capture=true,
+                            offlineSpeech=false, spatialMixing=false, stage="held-capture" } });
+                        else if(type=="captureDevices") Reply(new{requestId=id,type=type,success=true,devices=captureEngine.Devices()});
+                        else if(type=="captureFocus"){var r=Json.Deserialize<Dictionary<string,object>>(Json.Serialize(captureEngine.Focus(Field(request,"id"))));r["requestId"]=id;r["type"]=type;r["success"]=true;Reply(r);}
+                        else if(type=="captureStart"){var r=Json.Deserialize<Dictionary<string,object>>(Json.Serialize(captureEngine.Start(Field(request,"id"),Field(request,"deviceId"),Convert.ToInt32(request["maxDurationMs"]),Convert.ToDouble(request["sensitivity"]))));r["requestId"]=id;r["type"]=type;r["success"]=true;Reply(r);}
+                        else if(type=="captureLease"||type=="captureStop"||type=="captureChunk"){object value=type=="captureLease"?captureEngine.Lease(Field(request,"id"),Convert.ToInt32(request["sequence"])):type=="captureStop"?captureEngine.Stop(Field(request,"id")):captureEngine.Chunk(Field(request,"id"),Convert.ToInt32(request["sequence"]));var r=Json.Deserialize<Dictionary<string,object>>(Json.Serialize(value));r["requestId"]=id;r["type"]=type;r["success"]=true;Reply(r);}
+                        else if(type=="captureCancel"){captureEngine.Cancel(Field(request,"id"));Reply(new{requestId=id,type=type,success=true});}
                         else if (type == "ping") Reply(new { requestId=id, type=type, success=true });
                         else if (type == "shutdown") { Reply(new { requestId=id, type=type, success=true }); return 0; }
                         else Reply(new { requestId=id, type=type, success=false, error="Audio device commands are unavailable in this build." });
@@ -85,6 +90,7 @@ namespace LivingLosSantos.Audio
                 check(!AudioPolicy.ScopeIsCurrent("r","s","r","s",1500,1000,500,false,false));
                 check(!AudioPolicy.ScopeIsCurrent("r","s","r","s",999,1000,500,false,true));
                 check(AudioPolicy.Clamp(Double.NaN,0,1)==0);
+                passed+=CaptureEngine.SelfTest();
                 Reply(new { success=true, stage="offline-policy-only", passed=passed, audioDevicesOpened=0 }); return 0;
             } catch { Reply(new { success=false, stage="offline-policy-only", passed=passed, audioDevicesOpened=0 }); return 1; }
         }

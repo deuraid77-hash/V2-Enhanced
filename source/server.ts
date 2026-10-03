@@ -1,9 +1,17 @@
 import express from 'express';
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
-import { audioToWav, DEFAULT_TEXT_MODEL, DIPLOMATIC_STATUSES, FACTION_IDS, isAllowedLocalRequest, loadMemoryStore, normalizeWarfareUpdate, persistMemoryStore, readGeminiCredential, redactError, RuntimeStatus, serverConfiguration } from './server-lib/compatibility.ts';
+import { audioToWav, DEFAULT_TEXT_MODEL, DIPLOMATIC_STATUSES, FACTION_IDS, isAllowedLocalRequest, normalizeWarfareUpdate, readGeminiCredential, redactError, RuntimeStatus, serverConfiguration } from './server-lib/compatibility.ts';
+import { installMemoryRoutes } from './server-lib/memory-routes.ts';
+import { AudioHostProcess } from './server-lib/audio-host.ts';
+import { PttAudioHost } from './server-lib/ptt-host.ts';
+import { GeminiTranscriptionProvider } from './server-lib/ptt-provider.ts';
+import { PttService } from './server-lib/ptt.ts';
+import { installPttRoutes } from './server-lib/ptt-routes.ts';
 import { WorldState } from './server-lib/world.ts';
 import { installWorldRoutes } from './server-lib/world-routes.ts';
 import { SettingsStore } from './server-lib/settings-store.ts';
@@ -48,6 +56,10 @@ export const npcSettings = new SettingsStore(path.join(npcDataDirectory, 'npc-se
 npcSettings.bindWorld(world);
 export const aiProvider = new GeminiProvider(getRawAI, hasGemini);
 export const aiService = new AiService({ provider: aiProvider, getSettings: () => npcSettings.snapshot().settings, directory: npcDataDirectory });
+export const pttService=new PttService({host:new PttAudioHost(new AudioHostProcess({executable:path.join(__dirname,'audio-host','bin','LivingLosSantos.AudioHost.exe')})),provider:new GeminiTranscriptionProvider(getRawAI,hasGemini),getSettings:()=>npcSettings.snapshot().settings,budget:aiService.budget,scheduler:aiService.scheduler,validateTarget:target=>aiService.validateTarget(target,{purpose:'ptt'})});
+aiService.subscribeFrame(()=>pttService.validateActive());
+const legacyMemoryFile=path.join(process.env.LLAI_DATA_DIR||path.join(__dirname,'data'),'npc-memories.json');
+if(fs.existsSync(legacyMemoryFile)&&fs.statSync(legacyMemoryFile).size<=4*1024*1024){const bytes=fs.readFileSync(legacyMemoryFile),hash=createHash('sha256').update(bytes).digest('hex').slice(0,16),destination=path.join(npcDataDirectory,`legacy-browser-memory-${hash}.json`);if(!fs.existsSync(destination)){fs.mkdirSync(npcDataDirectory,{recursive:true});fs.copyFileSync(legacyMemoryFile,destination,fs.constants.COPYFILE_EXCL);}}
 const diagnosticReport = () => createDiagnosticReport({ settings: npcSettings.snapshot(), world: world.snapshot(), ai: aiService.status(), audio: { available: false } });
 export const menuAiService = new MenuAiService({ provider: aiProvider, budget: aiService.budget, scheduler: aiService.scheduler, getSettings: () => npcSettings.snapshot().settings, snapshot: () => npcSettings.snapshot(),
   previewBundle: (settings, worldPatch) => { npcSettings.previewBundle(settings, worldPatch); }, applyBundle: (settings, worldPatch, revision, worldRevision) => npcSettings.configureBundle(settings, worldPatch, 'advisor', revision, worldRevision), diagnosticReport, directory: npcDataDirectory });
@@ -109,64 +121,11 @@ const recordWorldTelemetry = (telemetry: unknown) => {
 installSettingsRoutes(app, npcSettings);
 installAiRoutes(app, aiService, world, npcSettings, recordWorldTelemetry, () => menuAiService.status());
 installMenuAiRoutes(app, menuAiService);
+installPttRoutes(app,pttService);
 installWorldRoutes(app, world, recordWorldTelemetry);
 installDiagnosticRoutes(app,path.join(npcDataDirectory,'diagnostics'),diagnosticReport);
 
-// Local companion memory only; independent of the installed mod and Firebase.
-const memoryFile = path.join(process.env.LLAI_DATA_DIR || path.join(__dirname, 'data'), 'npc-memories.json');
-const npcMemoryStore: Record<string, any> = loadMemoryStore(memoryFile);
-
-// Get all long-term memories
-app.get('/api/memory/all', (req, res) => {
-  res.json({ success: true, memories: npcMemoryStore });
-});
-
-// Record or update memory incident / grudge
-app.post('/api/memory/record', (req, res) => {
-  const { npcId, incident, grudge, alliance } = req.body;
-  if (typeof npcId !== 'string' || !/^[A-Za-z0-9_:-]{1,128}$/.test(npcId)) return res.status(400).json({ success: false, error: 'A bounded npcId is required.' });
-  if (JSON.stringify({ incident, grudge, alliance }).length > 16_000) return res.status(400).json({ success: false, error: 'Memory record is too large.' });
-  if (!npcMemoryStore[npcId] && Object.keys(npcMemoryStore).length >= 2000) return res.status(400).json({ success: false, error: 'Companion memory limit reached.' });
-
-  if (!npcMemoryStore[npcId]) {
-    npcMemoryStore[npcId] = {
-      npcId,
-      incidents: [],
-      grudge: { active: false, reason: '', severity: 'NONE', willAttackOnSight: false },
-      alliance: { active: false, reason: '', level: 'NONE', willProvideBackup: false },
-      lastEncounterDate: new Date().toISOString(),
-      totalEncounters: 0,
-    };
-  }
-
-  const mem = npcMemoryStore[npcId];
-  if (incident) {
-    mem.incidents.unshift(incident);
-    mem.incidents = mem.incidents.slice(0, 100);
-  }
-  if (grudge !== undefined) {
-    mem.grudge = grudge;
-  }
-  if (alliance !== undefined) {
-    mem.alliance = alliance;
-  }
-  mem.totalEncounters += 1;
-  mem.lastEncounterDate = new Date().toISOString();
-
-  try {
-    persistMemoryStore(memoryFile, npcMemoryStore);
-    res.json({ success: true, memory: mem, source: 'local-companion-memory' });
-  } catch (error) { res.status(500).json({ success: false, error: safeError(error) }); }
-});
-
-// Clear all memories
-app.delete('/api/memory/clear', (req, res) => {
-  for (const k in npcMemoryStore) delete npcMemoryStore[k];
-  try {
-    persistMemoryStore(memoryFile, npcMemoryStore);
-    res.json({ success: true, message: 'Local companion NPC memories reset' });
-  } catch (error) { res.status(500).json({ success: false, error: safeError(error) }); }
-});
+installMemoryRoutes(app, aiService.memory);
 
 // NPC Dialogue & Social Interaction with Gemini
 app.post('/api/dialogue', async (req, res) => {

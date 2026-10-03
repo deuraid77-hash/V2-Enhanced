@@ -25,7 +25,7 @@ try {
   Invoke-NpcCheck 'settings-generated' { & node.exe --import tsx scripts/generate-settings.ts --check }
   Invoke-NpcCheck 'typecheck' { & npm.cmd run typecheck }
   Invoke-NpcCheck 'backend-tests' { & npm.cmd test }
-  Invoke-NpcCheck 'portal-build' { & npm.cmd run build -- --outDir (Join-Path $taskEvidence 'portal-dist') }
+  Invoke-NpcCheck 'portal-build' { & npm.cmd run build -- --emptyOutDir --outDir (Join-Path $taskEvidence 'portal-dist') }
   Invoke-NpcCheck 'client-build' { & '.\game-client\Build-EnhancedClient.ps1' }
   Invoke-NpcCheck 'client-tests' { & '.\game-client\Test-EnhancedClient.ps1' }
   Invoke-NpcCheck 'client-audit' { & '.\game-client\Audit-EnhancedClient.ps1' }

@@ -15,7 +15,7 @@ namespace LivingLosSantosV2
         private NativeMenu nativeMenu;
         private readonly ConcurrentQueue<MenuReply> menuReplies=new ConcurrentQueue<MenuReply>();
         private int menuPending;
-        private sealed class MenuReply { public MenuRequest Request; public Dictionary<string,object> Data; public string Error; }
+        private sealed class MenuReply { public MenuRequest Request; public Dictionary<string,object> Data; public string Error; public bool Counted=true; }
         private void InitializeMenu()
         {
             nativeMenu=new NativeMenu(npcSettings,
@@ -46,7 +46,7 @@ namespace LivingLosSantosV2
         private void TickMenu(Ped player)
         {
             MenuReply reply;int count=0;
-            while(count++<8&&menuReplies.TryDequeue(out reply)){menuPending=Math.Max(0,menuPending-1);try{reply.Request.Done(reply.Data,reply.Error);}catch(Exception ex){Log("Menu response rejected: "+ex.GetType().Name);}}
+            while(count++<8&&menuReplies.TryDequeue(out reply)){if(reply.Counted)menuPending=Math.Max(0,menuPending-1);try{reply.Request.Done(reply.Data,reply.Error);}catch(Exception ex){Log("Menu response rejected: "+ex.GetType().Name);}}
             bool close=!CanOpenMenu(player);
             try{nativeMenu.Tick(close);}catch(Exception ex){Log("Native menu closed after "+ex.GetType().Name);nativeMenu.Close();}
         }
@@ -54,7 +54,7 @@ namespace LivingLosSantosV2
         {
             if(nativeMenu.IsOpen){nativeMenu.Close();return;}
             if(!CanOpenMenu(player)){Caption("Close phone/weapon controls and stop safely before opening the menu.",3500);return;}
-            CancelKeyboard();CancelConversation("Conversation ended when the menu opened.");nativeMenu.Toggle();
+            CancelKeyboard();EndTalkSession("Conversation ended when the menu opened.",false);nativeMenu.Toggle();
         }
         private bool CanOpenMenu(Ped player){return WorldDirector.Alive(player)&&!Game.IsPaused&&!Game.IsCutsceneActive&&!Function.Call<bool>(Hash.IS_SCREEN_FADED_OUT)&&!player.IsAiming&&!player.IsInCombat&&!Game.IsControlPressed(Control.SelectWeapon)&&!Function.Call<bool>(Hash.IS_PED_RUNNING_MOBILE_PHONE_TASK,player.Handle)&&(!player.IsInVehicle()||player.CurrentVehicle==null||player.CurrentVehicle.Speed<=5);}
     }
