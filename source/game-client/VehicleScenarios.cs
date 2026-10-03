@@ -136,6 +136,7 @@ namespace LivingLosSantosV2
                 if(message==null)
                 {
                     Caption(SpeakerName(ped)+" ["+run.Source+"]: "+beat.Speech,(int)(ScenarioBeatSeconds*1000)+1500);
+                    QueueVoiceCue(ped,beat.NpcId,beat.Speech,beat.Tone,"vehicle",run.Source,"B");
                     Emit("dialogue","NPC "+ped.Handle+" ["+run.Source+"]: "+beat.Speech,null,director.Faction(ped));
                     return;
                 }

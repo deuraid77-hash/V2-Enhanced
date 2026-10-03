@@ -32,7 +32,7 @@ namespace LivingLosSantosV2
 
         public async Task<Dictionary<string, object>> PostAsync(string route, string json, CancellationToken token)
         {
-            if (route != "api/dialogue" && route != "api/runtime/telemetry" && route != "api/runtime/exchange" && route != "api/ai/jobs")
+            if (route != "api/dialogue" && route != "api/runtime/telemetry" && route != "api/runtime/exchange" && route != "api/ai/jobs" && route != "api/audio/frame")
                 throw new ArgumentException("Unsupported dashboard route.");
             return await RequestAsync(HttpMethod.Post,route,json,token).ConfigureAwait(false);
         }

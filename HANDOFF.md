@@ -12,8 +12,8 @@ Codex ran out of credits while writing its handoff; this file replaces it. Its s
 | 1 Foundation | VERIFIED offline gate, commit `9a1d461` | `verification/npc-overhaul/foundation-20261003-193248/gate.json` |
 | 2 Menu/settings | VERIFIED offline gate, commit `2a9c8ce` | `verification/npc-overhaul/menu-20261003-202515/gate.json` |
 | 3 Mind/memory/PTT/actions | VERIFIED offline gate, commit `f2dcc92` | `verification/npc-overhaul/mind-20261003-212029/gate.json` |
-| 4 Vehicles | VERIFIED offline gate (see "Step 4" below) | `verification/npc-overhaul/vehicles-20261003-213816/gate.json` |
-| 5 Audio | Helper process scaffolding only (`source/audio-host`, NAudio vendored, PCM/IPC policy tests). No bank generation, TTS rendering, casting, spatial playback | — |
+| 4 Vehicles | VERIFIED offline gate, commit `5d5b291` | `verification/npc-overhaul/vehicles-20261003-213816/gate.json` |
+| 5 Audio | VERIFIED offline gate (see "Step 5" below). No device playback or Gemini TTS call was made | `verification/npc-overhaul/audio-20261003-220735/gate.json` |
 | 6 Director/perf/soak/panic/install | Not started | — |
 
 Nothing from V4 is installed in the game. The installed 3.0.1 DLL and V3 portal are preserved.
@@ -31,6 +31,16 @@ Nothing from V4 is installed in the game. The installed 3.0.1 DLL and V3 portal 
 - Flow: `VehicleScenarios.cs` `TickVehicles` (1 Hz, ≤16 peds within 25 m) → `VehiclePolicy.Classify` → `ScenarioGate.Offer` → exchange `vehicleOpportunities`. On the server, `ai-service.ts` `pulseVehicles` → Lane B `vehicleScenario` (fallback is Lane D) → update `kind:'scenario'`. Back in the client, `ConsumeScenario` (Parse + Bind, single-use claim) → `TickScenarioRun` (one beat every 3.5 s via `QueueNpcAction`).
 - Gap fixed: the client's `Describe()` never sent `vehicle`, so server-side vehicle action filtering was inert. It now sends it. Side effect: NPCs in vehicles are limited to vehicle-compatible actions in conversations too. This was Codex's server design, now active.
 - Known non-functional or partial scenarios are listed in `STATUS.md` (Step 4 scope) and the in-game sheet.
+
+## Step 5 notes
+- Backup of pre-change audio, client, server and doc files: `backups/step5-20261003-214845/`.
+- Flow: `AudioBridge.cs` `TickAudio` (after `TickPtt`) posts `/api/audio/frame` with listener pose, interior, speaker poses, queued voice cues and barks. On the server, `voice-routes.ts` → `VoiceService.frame()` picks a voice (`voice.ts` `castVoice`, stable per persona) and a source. The `audioHostProcess` in `server.ts` is shared with PTT, and `PlaybackEngine.cs` plays the speech with distance, pan and muffling.
+- Source rule: `auto` plays cached Gemini PCM if present, otherwise Windows SAPI. It never starts a metered render. `gemini` renders through the budget, with an output reservation that assumes 32 tokens/s (BELIEVED, not measured).
+- Line bank (`line-bank.ts`): 22 labelled seed lines. Generated refills run through lane C (`ai.bankModel`) and `validateGenerated`. They are persisted in `line-bank.json`. No refill has run against the real provider.
+- Transcripts: `transcripts.ts`, a capped JSONL log; `GET`/`DELETE /api/transcripts`.
+- Measured offline (`--render-test`, in memory, no device): 124.2 ms cold for 2.77 s of audio, 68.6 ms warm for 3.40 s. Installed SAPI voices: Hazel (en-GB) and Zira (en-US), both female, so male personas fall back to them.
+- Not implemented: ducking, following game volume, muffling based on window state (`windowMuffleGain` is unused), facial animation, Windows pitch, Gemini idle pre-render. On script abort, silence depends on the host's stale-pose timeout.
+- Unverified: the Gemini TTS response format. The docs example shows raw PCM; an earlier README claimed WAV. The provider rejects RIFF and falls back to Windows. The `gemini-3.8-*-tts` prices in `ai-budget.ts` came from Codex, and their provenance is unverified.
 
 ## How to run checks
 - Full offline gate: `& ".\Test-NpcOverhaul.ps1" -Stage <foundation|menu|mind|vehicles|audio|director|release>` from the repo root, in Windows PowerShell 5.1 (no pwsh installed). Writes `verification/npc-overhaul/<stage>-<timestamp>/gate.json`.

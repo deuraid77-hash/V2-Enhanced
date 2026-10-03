@@ -92,6 +92,15 @@ Also record `director.log` lines starting `Vehicle scenario rejected:` if any ap
 
 ## Voice and transcripts
 
+Step 5 measurements (spec §6.3 requires these numbers). While testing, keep `http://127.0.0.1:3000/api/audio/status` open in a browser.
+
+- [ ] **Line chosen → sound heard.** Talk to an NPC. Record the time from the subtitle appearing to the first audible word (stopwatch or video at 60 fps), 5 trials. Also copy `metrics.latencies[].receivedToHostAckMs`/`hostRenderMs` and `host.mixer` `hostToFirstMixMs`. Offline reference (VERIFIED, no device): Windows speech renders to memory in 124 ms cold / 69 ms warm.
+- [ ] **Pan/volume tracking.** While an NPC speaks, circle them and walk away. Pan must follow the camera and the voice must fade to silence by `audio.maxDistanceMeters`. Note any lag or zipper noise.
+- [ ] **Muffling.** Speaker inside a shop while you stand outside (interior), and you in a car with the speaker outside (vehicle). Window open/closed state is **not** detected; both window states sound the same by design.
+- [ ] **Voice cap.** Set `audio.maxVoices` to 1, trigger a bark during conversation: conversation must win; the bark must fade out.
+- [ ] **Pause/death/reload.** Pause, die, and reload scripts mid-line: audio stops within about `audio.positionStaleMs` (script unload relies on the stale-pose cutoff).
+- [ ] Only two Windows voices exist on this PC (Hazel, Zira; both female). Every NPC will use one of these until Gemini voice is enabled.
+
 - [ ] Test casual, combat, vehicle, phone and narrator category volumes. Test master mute and Quiet profile.
 - [ ] Walk around a speaking NPC and compare left/right pan. Walk away until inaudible. Turn the camera and verify listener orientation.
 - [ ] Compare open/closed windows and interior boundaries. Note muffling and range behavior.

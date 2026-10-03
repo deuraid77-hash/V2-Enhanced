@@ -12,7 +12,9 @@ $standardDll = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\netst
 foreach ($dependency in @($coreDll,$wasapiDll,$standardDll)) { if (-not (Test-Path -LiteralPath $dependency)) { throw 'Pinned helper dependency is missing. See audio-host/DEPENDENCIES.md.' } }
 Copy-Item -LiteralPath $coreDll,$wasapiDll -Destination $audioOutput -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'vendor\NAudio-LICENSE.txt') -Destination $audioOutput -Force
-& $compilerPath /nologo /target:exe /platform:anycpu /optimize+ /warnaserror+ /reference:System.Web.Extensions.dll "/reference:$coreDll" "/reference:$wasapiDll" "/reference:$standardDll" "/out:$audioExecutable" (Join-Path $PSScriptRoot 'AudioPolicy.cs') (Join-Path $PSScriptRoot 'CaptureEngine.cs') (Join-Path $PSScriptRoot 'AudioHost.cs')
+$speechDll = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\WPF\System.Speech.dll'
+if (-not (Test-Path -LiteralPath $speechDll)) { $speechDll = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\WPF\System.Speech.dll' }
+& $compilerPath /nologo /target:exe /platform:anycpu /optimize+ /warnaserror+ /reference:System.Web.Extensions.dll "/reference:$coreDll" "/reference:$wasapiDll" "/reference:$standardDll" "/reference:$speechDll" "/out:$audioExecutable" (Join-Path $PSScriptRoot 'AudioPolicy.cs') (Join-Path $PSScriptRoot 'CaptureEngine.cs') (Join-Path $PSScriptRoot 'PlaybackEngine.cs') (Join-Path $PSScriptRoot 'AudioHost.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Audio host compilation failed.' }
 if ($SelfTest) {
     & $audioExecutable --self-test

@@ -24,6 +24,11 @@ import { createDiagnosticReport } from './server-lib/diagnostics.ts';
 import { installDiagnosticRoutes } from './server-lib/diagnostic-routes.ts';
 import { MenuAiService } from './server-lib/ai-menu.ts';
 import { installMenuAiRoutes } from './server-lib/ai-menu-routes.ts';
+import { LineBank } from './server-lib/line-bank.ts';
+import { TranscriptLog } from './server-lib/transcripts.ts';
+import { GeminiVoiceProvider } from './server-lib/voice.ts';
+import { VoiceService } from './server-lib/voice-service.ts';
+import { installVoiceRoutes } from './server-lib/voice-routes.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -56,8 +61,12 @@ export const npcSettings = new SettingsStore(path.join(npcDataDirectory, 'npc-se
 npcSettings.bindWorld(world);
 export const aiProvider = new GeminiProvider(getRawAI, hasGemini);
 export const aiService = new AiService({ provider: aiProvider, getSettings: () => npcSettings.snapshot().settings, directory: npcDataDirectory });
-export const pttService=new PttService({host:new PttAudioHost(new AudioHostProcess({executable:path.join(__dirname,'audio-host','bin','LivingLosSantos.AudioHost.exe')})),provider:new GeminiTranscriptionProvider(getRawAI,hasGemini),getSettings:()=>npcSettings.snapshot().settings,budget:aiService.budget,scheduler:aiService.scheduler,validateTarget:target=>aiService.validateTarget(target,{purpose:'ptt'})});
+export const audioHostProcess=new AudioHostProcess({executable:path.join(__dirname,'audio-host','bin','LivingLosSantos.AudioHost.exe')});
+export const pttService=new PttService({host:new PttAudioHost(audioHostProcess),provider:new GeminiTranscriptionProvider(getRawAI,hasGemini),getSettings:()=>npcSettings.snapshot().settings,budget:aiService.budget,scheduler:aiService.scheduler,validateTarget:target=>aiService.validateTarget(target,{purpose:'ptt'})});
 aiService.subscribeFrame(()=>pttService.validateActive());
+export const lineBank=new LineBank({file:path.join(npcDataDirectory,'line-bank.json'),provider:aiProvider,budget:aiService.budget,scheduler:aiService.scheduler,getSettings:()=>npcSettings.snapshot().settings});
+export const transcriptLog=new TranscriptLog(path.join(npcDataDirectory,'transcripts.jsonl'),()=>npcSettings.snapshot().settings);
+export const voiceService=new VoiceService({host:audioHostProcess,getSettings:()=>npcSettings.snapshot().settings,directory:npcDataDirectory,bank:lineBank,transcripts:transcriptLog,gemini:new GeminiVoiceProvider(getRawAI,hasGemini,()=>{const m=npcSettings.snapshot().settings['ai.ttsModel'];return typeof m==='string'&&m?m:TTS_MODEL;}),budget:aiService.budget,scheduler:aiService.scheduler});
 const legacyMemoryFile=path.join(process.env.LLAI_DATA_DIR||path.join(__dirname,'data'),'npc-memories.json');
 if(fs.existsSync(legacyMemoryFile)&&fs.statSync(legacyMemoryFile).size<=4*1024*1024){const bytes=fs.readFileSync(legacyMemoryFile),hash=createHash('sha256').update(bytes).digest('hex').slice(0,16),destination=path.join(npcDataDirectory,`legacy-browser-memory-${hash}.json`);if(!fs.existsSync(destination)){fs.mkdirSync(npcDataDirectory,{recursive:true});fs.copyFileSync(legacyMemoryFile,destination,fs.constants.COPYFILE_EXCL);}}
 const diagnosticReport = () => createDiagnosticReport({ settings: npcSettings.snapshot(), world: world.snapshot(), ai: aiService.status(), audio: { available: false } });
@@ -122,6 +131,7 @@ installSettingsRoutes(app, npcSettings);
 installAiRoutes(app, aiService, world, npcSettings, recordWorldTelemetry, () => menuAiService.status());
 installMenuAiRoutes(app, menuAiService);
 installPttRoutes(app,pttService);
+installVoiceRoutes(app,voiceService,lineBank,transcriptLog);
 installWorldRoutes(app, world, recordWorldTelemetry);
 installDiagnosticRoutes(app,path.join(npcDataDirectory,'diagnostics'),diagnosticReport);
 

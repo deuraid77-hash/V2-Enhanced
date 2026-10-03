@@ -9,6 +9,7 @@ $arguments = @('/nologo','/target:exe','/optimize+','/warn:4',('/out:'+$executab
 $arguments += @('SettingsCatalog.Generated.cs','FoundationPolicy.cs','RuntimeCompatibility.cs','MenuPolicy.cs','test\FoundationTests.cs','test\MenuPolicyTests.cs') | ForEach-Object { Join-Path $PSScriptRoot $_ }
 $arguments += Join-Path $PSScriptRoot 'ActionPolicy.cs'
 $arguments += @('VehiclePolicy.cs','test\VehiclePolicyTests.cs') | ForEach-Object { Join-Path $PSScriptRoot $_ }
+$arguments += @('VoicePolicy.cs','test\VoicePolicyTests.cs') | ForEach-Object { Join-Path $PSScriptRoot $_ }
 & $compiler $arguments
 if ($LASTEXITCODE -ne 0) { throw 'Offline test compile failed.' }
 & $executable (Join-Path $output 'offline-tests.json')

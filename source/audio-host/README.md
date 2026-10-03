@@ -29,3 +29,11 @@ npx tsx --test test/audio-foundation.test.ts
 ```
 
 **VERIFIED:** the second command tests voice-input bounds, signed PCM decoding and container rejection, inert construction, fragmented process messages, malformed replies, safe restart handling, bounded shutdown, executable-path validation and oversized request rejection. Its process is an in-memory test fixture; it does not play or record audio.
+
+## Playback stage (Step 5, 2026-10-03)
+
+**VERIFIED:** `Build-AudioHost.ps1 -SelfTest` builds `4.0.0-playback` with `/warnaserror+` and passes 44 checks (policy, capture, and the `PlaybackEngine` mixer: priority preemption with fade, same-NPC replacement, smoothed pan, stale-pose silencing, low-pass, PCM bounds). It opens 0 audio devices.
+**VERIFIED:** `LivingLosSantos.AudioHost.exe --render-test` renders System.Speech to memory at 24 kHz/16-bit/mono: 124.2 ms cold for 2.77 s of audio, 68.6 ms warm for 3.40 s. No device was opened.
+**BELIEVED (untested):** commands `playConfigure`, `play` (`source:file` restricted to `^[a-f0-9]{64}\.pcm$` inside `cacheRoot`, or `source:windows`), `playPositions`, `playStatus`, `playStop`, `playStopAll` and `windowsVoices` drive a lazily opened shared-mode WASAPI output (48 kHz float stereo, 60 ms). Shared-mode format conversion on the user's device is unverified. Device output, audibility and latency are user test-sheet items.
+**BELIEVED:** Gemini TTS response handling follows the speech-generation guide (`interaction.output_audio.data`, base64 PCM). The provider rejects a RIFF/WAV payload. If unary output is WAV, as noted earlier in this file, Gemini voice would fall back to Windows speech. No paid call was made to settle this.
+**Not implemented:** game-session ducking, following the game session volume, window-state muffling (not readable), facial animation, pitch shifting for Windows voices.

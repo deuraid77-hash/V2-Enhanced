@@ -30,6 +30,10 @@
 
 **VERIFIED limitation — Step 4 scope:** `passengerChat` is detected, but it cannot act: the existing guard excludes NPCs in the player's vehicle from all actions. Lifts have no destination travel, traffic stops have no bribe logic, breakdowns have no repair flow, and carjack/impact witnesses are not separate participants. These are recorded in the in-game sheet as expected behaviour, not as passes.
 
-**BELIEVED:** full audio, expanded director, performance testing and final installation/acceptance remain required; the overhaul is not complete. See `HANDOFF.md`.
+**VERIFIED — Step 5 offline gate passed on 3 October 2026 (22:07 +10:00):** `Test-NpcOverhaul.ps1 -Stage audio` passed all nine checks: 205 backend tests (13 new in `test/voice.test.ts`), 107 C# tests (9 new voice-policy checks), 192/192 resolved SDK references, 17 native names (none added), audio-helper policy and installer/rollback. Evidence: `verification/npc-overhaul/audio-20261003-220735/gate.json`. `Build-AudioHost.ps1 -SelfTest` passed 44 checks and opened 0 audio devices. An in-memory SAPI render took 124.2 ms cold for 2.77 s of audio and 68.6 ms warm for 3.40 s; no device was opened. New: voice casting, cache, Gemini TTS provider, line bank, transcripts, voice routes, `PlaybackEngine.cs`, `AudioBridge.cs`, `VoicePolicy.cs`.
+
+**VERIFIED limitation — Step 5 scope:** by user decision, no Gemini TTS request was made and no audio device was opened, so audibility, spatial placement, first-audio latency and the Gemini response format (PCM vs WAV) are unmeasured. Ducking, following game volume, window-state muffling, facial animation and Windows pitch are not implemented. Only two female SAPI voices are installed. The line bank has not been refilled against the real provider.
+
+**BELIEVED:** the expanded director, performance testing and final installation/acceptance remain required; the overhaul is not complete. See `HANDOFF.md`.
 
 **GUESS:** no guessed compatibility, latency, audibility or gameplay result is used as acceptance evidence.

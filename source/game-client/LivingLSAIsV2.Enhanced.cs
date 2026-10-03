@@ -69,7 +69,7 @@ namespace LivingLosSantosV2
         { public bool Job; public int Frame; public string Error,Epoch,RequestId,Kind; public string[] EventIds,AckIds,ReceiptIds,OutcomeIds,MindOutcomeIds,WitnessIds; public Dictionary<string,object> Response; }
         public EnhancedClient()
         {
-            if(!String.Equals(System.Diagnostics.Process.GetCurrentProcess().ProcessName,"GTA5_Enhanced",StringComparison.OrdinalIgnoreCase)) { stopping=true; transport.Dispose(); return; }
+            if(!String.Equals(System.Diagnostics.Process.GetCurrentProcess().ProcessName,"GTA5_Enhanced",StringComparison.OrdinalIgnoreCase)) { stopping=true; transport.Dispose(); audioTransport.Dispose(); return; }
             string executable=System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
             compatibility=RuntimeCompatibility.Inspect(executable,Path.Combine(Path.GetDirectoryName(executable),"ScriptHookVDotNet3.dll"));
             director=new WorldDirector(Emit,Acknowledge,SaveCampaign);
@@ -103,7 +103,7 @@ namespace LivingLosSantosV2
                 UpdateScene(player,pause);
                 bool canMenu=nativeMenu.IsOpen||CanOpenMenu(player);
                 foreach(string action in input.Poll(npcSettings,keyboardTarget!=null||nativeMenu.KeyboardOpen,storyModeReady&&!nativeMenu.IsOpen&&canMenu,canMenu)) {
-                    if(action=="panic") { panic=true; pause="Panic stop active; restart the script to resume"; storyModeReady=false; UpdateScene(player,pause); CancelConversation("Panic stop"); CancelKeyboard(); nativeMenu.PanicStop(); director.Clear("Panic stop"); ClearVehicleScenarios("Panic stop"); promptRequested=false; toggleRequested=false; Caption("Panic stop: owned scenarios and AI cancelled.",5000); break; }
+                    if(action=="panic") { panic=true; pause="Panic stop active; restart the script to resume"; storyModeReady=false; UpdateScene(player,pause); CancelConversation("Panic stop"); CancelKeyboard(); nativeMenu.PanicStop(); director.Clear("Panic stop"); ClearVehicleScenarios("Panic stop"); ClearAudio(); promptRequested=false; toggleRequested=false; Caption("Panic stop: owned scenarios and AI cancelled.",5000); break; }
                     else if(action=="talk"&&!dialoguePending&&keyboardTarget==null) promptRequested=true;
                     else if(action=="director") toggleRequested=true;
                     else if(action=="menu") ToggleMenu(player);
@@ -119,6 +119,7 @@ namespace LivingLosSantosV2
                 TickMind(player,pause);
                 TickConversationUI(player,pause);
                 TickPtt(player,pause);
+                TickAudio(player,pause);
                 RestoreWeapons(pause!=null);
                 var directorTimer=System.Diagnostics.Stopwatch.StartNew();
                 director.Tick(player,pause);
@@ -175,7 +176,7 @@ namespace LivingLosSantosV2
             bool hard=pause!=null&&pause!="Game paused"&&pause!="Dialogue keyboard open"&&pause!="Native menu open"&&pause!="Reply wheel open";
             int handle=player!=null&&player.Exists()?player.Handle:0;
             if((hard&&lastHardPause!=pause)||(lastPlayerHandle!=0&&handle!=lastPlayerHandle)) {
-                sceneEpoch=Guid.NewGuid().ToString("N"); registeredEpoch=null; CancelConversation("Scene changed"); CancelKeyboard(); ClearVehicleScenarios("Scene changed"); observedNpcs.Clear(); scanCandidates.Clear(); seen.Clear(); nextScan=DateTime.MinValue;
+                sceneEpoch=Guid.NewGuid().ToString("N"); registeredEpoch=null; CancelConversation("Scene changed"); CancelKeyboard(); ClearVehicleScenarios("Scene changed"); ClearAudio(); observedNpcs.Clear(); scanCandidates.Clear(); seen.Clear(); nextScan=DateTime.MinValue;
             }
             lastHardPause=hard?pause:null; lastPlayerHandle=handle;
         }
@@ -279,7 +280,7 @@ namespace LivingLosSantosV2
                 foreach(var note in notes) memory.Note=ResponsePolicy.CleanText(note["text"],160);
                 memory.History.Add(new Dictionary<string,object>{{"role","player"},{"text",conversation.Utterance}}); memory.History.Add(new Dictionary<string,object>{{"role","npc"},{"text",speech}}); while(memory.History.Count>24) memory.History.RemoveAt(0);
                 foreach(var action in actions) ExecuteAiAction(action,jobId,conversation,player);
-                Caption("NPC ["+ResponsePolicy.CleanText(source,40)+"]: "+speech,10000); Emit("dialogue","NPC "+conversation.Handle+" ["+ResponsePolicy.CleanText(source,40)+"]: "+speech,null,director.Faction(conversation.Ped));
+                Caption("NPC ["+ResponsePolicy.CleanText(source,40)+"]: "+speech,10000); QueueVoiceCue(conversation.Ped,conversation.NpcId,speech,tone,"conversation",source,"A"); Emit("dialogue","NPC "+conversation.Handle+" ["+ResponsePolicy.CleanText(source,40)+"]: "+speech,null,director.Faction(conversation.Ped));
                 conversation=null; dialoguePending=false;
                 if(talkSession!=null){talkSession.Turns++;talkSession.IdleUntil=DateTime.UtcNow.AddSeconds(npcSettings.Number("conversation.timeoutSeconds"));if(talkSession.Turns>=(int)npcSettings.Number("conversation.maxTurns"))EndTalkSession("Conversation turn limit reached.",true);}
             } catch(InvalidOperationException ex) { Log("AI update rejected: "+ex.Message); CancelConversation("AI result rejected by local validation."); }
@@ -471,6 +472,7 @@ namespace LivingLosSantosV2
             try { if(nativeMenu!=null)nativeMenu.Close(); } catch { }
             try { ClearNpcActions("Script unloading"); ReleaseNotables(true); } catch { }
             try { ClearVehicleScenarios("Script unloading"); } catch { }
+            try { ClearAudio(); audioTransport.Dispose(); } catch { }
             try { RestoreWeapons(true); } catch { Log("A temporary weapon selection could not be restored during abort."); }
             try { director.Dispose(); SaveCampaign(); } catch(Exception ex) { Log("Abort cleanup: "+ex.GetType().Name); }
             cancellation.Cancel(); transport.Dispose(); Completion item; while(completed.TryDequeue(out item)) {}

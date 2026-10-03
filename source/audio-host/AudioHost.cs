@@ -19,7 +19,9 @@ namespace LivingLosSantos.Audio
             Console.InputEncoding = new UTF8Encoding(false);
             Console.OutputEncoding = new UTF8Encoding(false);
             if (args.Length == 1 && args[0] == "--self-test") return SelfTest();
+            if (args.Length == 1 && args[0] == "--render-test") return RenderTest();
             if (args.Length != 0) return 2;
+            using(var playback=new PlaybackEngine())
             using(var captureEngine=new CaptureEngine()) try {
                 for (;;) {
                     string line = ReadBoundedLine();
@@ -32,8 +34,12 @@ namespace LivingLosSantos.Audio
                         id = Field(request, "requestId"); type = Field(request, "type");
                         if (!Identifier.IsMatch(id) || !Identifier.IsMatch(type)) throw new InvalidOperationException();
                         if (type == "capabilities") Reply(new { requestId=id, type=type, success=true, capabilities=new {
-                            protocol=1, version="4.0.0-held-capture", playback=false, capture=true,
-                            offlineSpeech=false, spatialMixing=false, stage="held-capture" } });
+                            protocol=1, version="4.0.0-playback", playback=true, capture=true,
+                            offlineSpeech=true, spatialMixing=true, stage="playback" } });
+                        else if(type=="playConfigure"||type=="play"||type=="playPositions"||type=="playStatus"){object value=type=="playConfigure"?playback.Configure(request):type=="play"?playback.Play(request):type=="playPositions"?playback.Positions(request):playback.Status();var r=Json.Deserialize<Dictionary<string,object>>(Json.Serialize(value));r["requestId"]=id;r["type"]=type;r["success"]=true;Reply(r);}
+                        else if(type=="playStop"){bool stopped=playback.Mixer.Stop(Field(request,"id"));Reply(new{requestId=id,type=type,success=true,stopped=stopped});}
+                        else if(type=="playStopAll"){Reply(new{requestId=id,type=type,success=true,stopped=playback.Mixer.StopAll()});}
+                        else if(type=="windowsVoices"){Reply(new{requestId=id,type=type,success=true,voices=PlaybackEngine.WindowsVoices()});}
                         else if(type=="captureDevices") Reply(new{requestId=id,type=type,success=true,devices=captureEngine.Devices()});
                         else if(type=="captureFocus"){var r=Json.Deserialize<Dictionary<string,object>>(Json.Serialize(captureEngine.Focus(Field(request,"id"))));r["requestId"]=id;r["type"]=type;r["success"]=true;Reply(r);}
                         else if(type=="captureStart"){var r=Json.Deserialize<Dictionary<string,object>>(Json.Serialize(captureEngine.Start(Field(request,"id"),Field(request,"deviceId"),Convert.ToInt32(request["maxDurationMs"]),Convert.ToDouble(request["sensitivity"]))));r["requestId"]=id;r["type"]=type;r["success"]=true;Reply(r);}
@@ -91,8 +97,19 @@ namespace LivingLosSantos.Audio
                 check(!AudioPolicy.ScopeIsCurrent("r","s","r","s",999,1000,500,false,true));
                 check(AudioPolicy.Clamp(Double.NaN,0,1)==0);
                 passed+=CaptureEngine.SelfTest();
+                passed+=PlaybackEngine.SelfTest();
                 Reply(new { success=true, stage="offline-policy-only", passed=passed, audioDevicesOpened=0 }); return 0;
             } catch { Reply(new { success=false, stage="offline-policy-only", passed=passed, audioDevicesOpened=0 }); return 1; }
+        }
+        // Measures Windows speech synthesis into memory. Opens no output device.
+        private static int RenderTest()
+        {
+            try {
+                var voices=PlaybackEngine.WindowsVoices(); var timer=System.Diagnostics.Stopwatch.StartNew();
+                var cold=PlaybackEngine.RenderWindows("Hey, watch where you are going.",0,0); double coldMs=timer.Elapsed.TotalMilliseconds; timer.Restart();
+                var warm=PlaybackEngine.RenderWindows("Nice ride. The light is about to change.",1,1); double warmMs=timer.Elapsed.TotalMilliseconds;
+                Reply(new { success=true, stage="render-to-memory", voices=voices, coldRenderMs=Math.Round(coldMs,1), coldAudioMs=cold.Length*1000L/24000, warmRenderMs=Math.Round(warmMs,1), warmAudioMs=warm.Length*1000L/24000, audioDevicesOpened=0 }); return 0;
+            } catch(Exception ex) { Reply(new { success=false, stage="render-to-memory", error=ex.GetType().Name, audioDevicesOpened=0 }); return 1; }
         }
     }
 }

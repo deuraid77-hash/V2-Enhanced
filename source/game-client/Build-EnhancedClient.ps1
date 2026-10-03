@@ -9,7 +9,7 @@ if (!(Test-Path -LiteralPath $api)) { throw 'Set GameRoot to a GTA V Enhanced in
 $output = Join-Path $clientRoot 'bin'
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 $arguments = @('/nologo','/target:library','/platform:anycpu','/optimize+','/warn:4',('/out:'+(Join-Path $output 'LivingLSAIsV2.Enhanced.dll')),('/reference:'+$api),('/reference:'+(Join-Path $framework 'System.dll')),('/reference:'+(Join-Path $framework 'System.Core.dll')),('/reference:'+(Join-Path $framework 'System.Windows.Forms.dll')),('/reference:'+(Join-Path $framework 'System.Net.Http.dll')),('/reference:'+(Join-Path $framework 'System.Web.Extensions.dll')),(Join-Path $clientRoot 'WorldPolicy.cs'),(Join-Path $clientRoot 'WorldDirector.cs'),(Join-Path $clientRoot 'ResponsePolicy.cs'),(Join-Path $clientRoot 'DashboardTransport.cs'),(Join-Path $clientRoot 'LivingLSAIsV2.Enhanced.cs'))
-$arguments += @('SettingsCatalog.Generated.cs','FoundationPolicy.cs','RuntimeCompatibility.cs','InputRouter.cs','MenuPolicy.cs','NativeMenu.cs','MenuBridge.cs','NpcActions.cs','MindBridge.cs','MindPolicy.cs','ConversationPolicy.cs','ConversationUI.cs','PttBridge.cs','VehiclePolicy.cs','VehicleScenarios.cs') | ForEach-Object { Join-Path $clientRoot $_ }
+$arguments += @('SettingsCatalog.Generated.cs','FoundationPolicy.cs','RuntimeCompatibility.cs','InputRouter.cs','MenuPolicy.cs','NativeMenu.cs','MenuBridge.cs','NpcActions.cs','MindBridge.cs','MindPolicy.cs','ConversationPolicy.cs','ConversationUI.cs','PttBridge.cs','VehiclePolicy.cs','VehicleScenarios.cs','VoicePolicy.cs','AudioBridge.cs') | ForEach-Object { Join-Path $clientRoot $_ }
 $arguments += '/reference:'+(Join-Path $framework 'System.Drawing.dll')
 $arguments += Join-Path $PSScriptRoot 'ActionPolicy.cs'
 & $compiler $arguments
