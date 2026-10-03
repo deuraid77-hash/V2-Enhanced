@@ -13,8 +13,8 @@ Codex ran out of credits while writing its handoff; this file replaces it. Its s
 | 2 Menu/settings | VERIFIED offline gate, commit `2a9c8ce` | `verification/npc-overhaul/menu-20261003-202515/gate.json` |
 | 3 Mind/memory/PTT/actions | VERIFIED offline gate, commit `f2dcc92` | `verification/npc-overhaul/mind-20261003-212029/gate.json` |
 | 4 Vehicles | VERIFIED offline gate, commit `5d5b291` | `verification/npc-overhaul/vehicles-20261003-213816/gate.json` |
-| 5 Audio | VERIFIED offline gate (see "Step 5" below). No device playback or Gemini TTS call was made | `verification/npc-overhaul/audio-20261003-220735/gate.json` |
-| 6 Director/perf/soak/panic/install | Not started | — |
+| 5 Audio | VERIFIED offline gate, commit `6dfa974`. No device playback or Gemini TTS call was made | `verification/npc-overhaul/audio-20261003-220735/gate.json` |
+| 6 Director/perf/soak/panic/install | Street-scenario director + companion soak: VERIFIED offline gate (10 checks). In-game tick/frame numbers, panic/safe-mode execution, release packaging: NOT done (see "Step 6") | `verification/npc-overhaul/director-20261003-222323/gate.json` |
 
 Nothing from V4 is installed in the game. The installed 3.0.1 DLL and V3 portal are preserved.
 
@@ -41,6 +41,23 @@ Nothing from V4 is installed in the game. The installed 3.0.1 DLL and V3 portal 
 - Measured offline (`--render-test`, in memory, no device): 124.2 ms cold for 2.77 s of audio, 68.6 ms warm for 3.40 s. Installed SAPI voices: Hazel (en-GB) and Zira (en-US), both female, so male personas fall back to them.
 - Not implemented: ducking, following game volume, muffling based on window state (`windowMuffleGain` is unused), facial animation, Windows pitch, Gemini idle pre-render. On script abort, silence depends on the host's stale-pose timeout.
 - Unverified: the Gemini TTS response format. The docs example shows raw PCM; an earlier README claimed WAV. The provider rejects RIFF and falls back to Windows. The `gemini-3.8-*-tts` prices in `ai-budget.ts` came from Codex, and their provenance is unverified.
+
+## Step 6 notes
+- Backup of pre-change files: `backups/step6-20261003-221408/` (includes root `package-result.json`, `release-manifest.json`, `world-package-verification.json`; none of these were modified).
+- Street scenarios (`EXTRA_SCENARIOS`) reuse the Step 4 pipeline end to end:
+  - Client: `StreetPolicy.cs` classifies, inside the existing scan in `VehicleScenarios.cs`.
+  - Server: `street-scenarios.ts` provides briefs, fallbacks and weights; `vehicle-scenarios.ts` validates and admits; `ai-service.ts` `pulseVehicles` plans.
+  - `ScenarioCatalog` decides which names the shared gate and parser accept.
+  - Contract: `WORLD-PROTOCOL.md` § Street scenarios.
+- `director.<id>Weight`, `director.nightMultiplier`, `director.rainMultiplier` and `director.<district>Multiplier` were dead settings before this step. They are now consumed for street scenarios only. Grove/Forum district matching depends on zone names that have not been checked in the game.
+- Soak finding (VERIFIED, fixed): background director and memory jobs were never pruned from `AiService.jobs`. A 2-hour simulated run reached 720 entries, growing linearly. The fix applies the existing 256-finished-job bound via `pruneFinishedJobs()`. After the fix, a 4-hour run peaked at 256. Regression test: `test/soak.test.ts`. Harness: `scripts/soak-companion.ts` (companion only; fixture provider; simulated clock; memory pulses disabled).
+- Gate: `-Stage director|release` adds a 10th check, `companion-soak` (4 h simulated).
+- Panic/safe mode: no code change. Code reading (BELIEVED) shows that the key and menu panic paths both end actions, scenarios and audio by the next tick, through the hard-pause path in `UpdateScene`/`TickNpcActions`/`TickVehicles`/`TickAudio`. Safe mode pauses work but still constructs every component. None of this has been executed in the game.
+- Release packaging is BLOCKED and was not run:
+  - `Package-Enhanced.ps1` calls `rg`, which is not on PATH (`Get-Command rg` returned nothing).
+  - `release-manifest.json` pins the V3 DLL hash `8A2348AD…`; the current V4 build is `6B1DAEFD…`, so `Verify-WorldPackage.ps1` would reject it.
+  - Regenerating the manifest is a ship decision for the user.
+- Not done: measured tick cost and frame time (needs the game), on-screen debug overlay check, and multi-NPC participants in street scenes.
 
 ## How to run checks
 - Full offline gate: `& ".\Test-NpcOverhaul.ps1" -Stage <foundation|menu|mind|vehicles|audio|director|release>` from the repo root, in Windows PowerShell 5.1 (no pwsh installed). Writes `verification/npc-overhaul/<stage>-<timestamp>/gate.json`.

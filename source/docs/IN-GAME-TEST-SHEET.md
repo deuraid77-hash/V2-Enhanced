@@ -115,10 +115,28 @@ Step 5 measurements (spec §6.3 requires these numbers). While testing, keep `ht
 
 - [ ] Near Grove Street/Davis, observe a turf war. Verify observed winner/territory ownership, persistence and eventual owned cleanup. An interrupted battle must not invent a winner.
 - [ ] Observe street fights and the noncombat scenes: arguments, deals, chases, hold-ups, tourists, fans, drunks, protests, police/civilian incidents and aftermath chatter.
+
+Step 6 street scenarios. Each one uses an existing ambient NPC; nothing is spawned. Only one NPC speaks and acts, even when the scene is a group. At most one scenario (vehicle or street) runs at a time, and the same scenario cannot repeat for 45 s. Record `director.log` `vehicle_scenario` lines; street scenarios also use this event name.
+
+| Scenario | Trigger (on foot, no wanted level unless noted) | Expected |
+|---|---|---|
+| Hold-up | Aim a gun at a non-police pedestrian within 15 m (wanted level allowed). | Plead / surrender / flee line. Voice category is combat. |
+| Police/civilian | Stand within 30 m of a police officer on foot who is within 4 m of a civilian. | Officer line ("move along" style). |
+| Chase | A pedestrian runs away (fleeing) within 25 m while no shooting is happening. | Fleeing line. |
+| Aftermath | Fire a gun, stop, and wait about 10 s near civilians. | Civilian line about the shooting, sometimes a phone/911 call. With `safety.maxPoliceResponseWanted` at 0, no wanted level is raised. |
+| Deal | Gang member standing next to exactly one other person. | Gang line telling you to move on. |
+| Protest | 4+ civilians bunched within 4 m of each other by day. | Protest line from one of them. |
+| Drunks | 3+ civilians bunched together at night (20:00–05:59 game time). | Rowdy invitation line. |
+| Argument | Two civilians standing together. | One side of an argument (the other person stays silent). |
+| Fan | A civilian walking towards you within 8 m while you are unarmed. | Recognition line. |
+| Tourist | A standing civilian within 8 m by day while you are unarmed. | Directions/small-talk line. |
+
+- [ ] For each row above: scenario starts, subtitle shows a `[gemini]` or `[fallback]` label, the NPC performs the action, and nothing remains afterwards.
 - [ ] Set one scenario/district weight to zero and verify it prevents starts. Restore defaults afterward.
-- [ ] Run a long session with encounters, conversations, vehicles, menus and repeated interruptions. Record duration, maximum owned entities, queue growth, audio count and measured Tick/frame times.
-- [ ] Press panic during speech, AI work and a scene. Owned entities/tasks/audio stop; controls return; menu stays usable.
-- [ ] Start safe mode. Confirm only menu/diagnostics run and risky features remain disabled.
+- [ ] **Tick cost.** Enable the debug overlay if available, or read `tickMetrics` (`lastMs`, `p95Ms`, `maxMs`, `deferred`) from `GET /api/ai/status` or diagnostics. Record p95 and max while standing in a crowded street (Vespucci beach / Legion Square) with the mod on, and again with `general.enabled` off. Compare game frame time with RTSS or the Steam overlay. `performance.tickBudgetMs` defaults to 1 ms; this value has not been measured in the game.
+- [ ] Run a long session with encounters, conversations, vehicles, menus and repeated interruptions. Record duration, maximum owned entities, queue growth, audio count and measured Tick/frame times. Offline reference (VERIFIED): a simulated 4-hour companion soak stayed bounded at ≤256 jobs with 0 errors. It covered only the companion, not the game.
+- [ ] Press panic (F10 or the menu item) during speech, AI work and a scene. Owned entities/tasks/audio stop; controls return; menu stays usable. Test both paths: the menu path cleans up on the next tick, not immediately.
+- [ ] Start safe mode. Confirm only menu/diagnostics run and risky features remain disabled. Note: safe mode pauses all NPC, AI, audio and scenario work, but those components are still loaded.
 - [ ] Confirm the US$5 combined daily cap, timezone and unknown-usage reservations are visible. Provider failure/restart must not reset today's allowance.
 - [ ] Export sanitized diagnostics. If recovery is needed, close GTA/RAGE and use the supplied guarded disable/rollback workflow; confirm unrelated mods and campaign files remain.
 

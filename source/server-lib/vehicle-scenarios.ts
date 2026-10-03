@@ -5,11 +5,14 @@
 // Nothing here touches the game; the client re-validates every beat on Tick.
 import { NPC_ACTIONS, VEHICLE_SCENARIOS } from '../shared/settings.ts';
 import { AiError, boundedText, onlyKeys, record, settingBoolean, settingNumber, type SettingsGetter } from './ai-types.ts';
+import { STREET_BRIEFS, STREET_FALLBACK, isStreetScenario, streetWeight, type DirectorEnvironment, type StreetScenario } from './street-scenarios.ts';
 
 export type VehicleScenario = typeof VEHICLE_SCENARIOS[number];
+// Step 6: street scenarios share this opportunity/plan pipeline (one primary NPC).
+export type AnyScenario = VehicleScenario | StreetScenario;
 export type NpcAction = typeof NPC_ACTIONS[number];
 export type VehicleFacts = { playerInVehicle: boolean; playerSpeed: number; npcSpeed: number; wantedLevel: number; contact: boolean; npcFaction: string };
-export type VehicleOpportunity = { id: string; scenario: VehicleScenario; npcIds: string[]; detectedAt: string; facts: VehicleFacts };
+export type VehicleOpportunity = { id: string; scenario: AnyScenario; npcIds: string[]; detectedAt: string; facts: VehicleFacts };
 export type ScenarioBeat = { npcId: string; speech: string; voiceTone: string; action: NpcAction };
 export type ScenarioPlan = { title: string; beats: ScenarioBeat[] };
 
@@ -20,7 +23,7 @@ const UUID = /^[\da-f]{8}-[\da-f]{4}-[1-8][\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12
 
 // What each scenario means, in words the provider receives. Kept factual so the
 // model does not invent outcomes the game will not perform.
-export const SCENARIO_BRIEFS: Record<VehicleScenario, string> = {
+export const SCENARIO_BRIEFS: Record<AnyScenario, string> = {
   windowTalk: 'The player is on foot beside a stopped NPC vehicle and can speak through the window.',
   carToCar: 'The player and an NPC driver are side by side, stopped or crawling in traffic.',
   passengerChat: 'An NPC shares a vehicle with the player as driver or passenger.',
@@ -31,7 +34,9 @@ export const SCENARIO_BRIEFS: Record<VehicleScenario, string> = {
   trafficStop: 'A police officer is close to the player while the player has a low wanted level.',
   driveBy: 'An occupied gang vehicle is cruising slowly near the player on its turf.',
   breakdown: 'An NPC is beside a badly damaged or undriveable vehicle near the player.',
+  ...STREET_BRIEFS,
 };
+const isVehicleScenario = (value: unknown): value is VehicleScenario => (VEHICLE_SCENARIOS as readonly unknown[]).includes(value);
 
 const uuid = (value: unknown, name: string) => { const s = boundedText(value, 36, name); if (!UUID.test(s)) throw new AiError('invalid_payload', `${name} must be a UUID.`); return s.toLowerCase(); };
 const finite = (value: unknown, min: number, max: number, name: string) => { if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) throw new AiError('invalid_payload', `${name} is outside its allowed range.`); return value; };
@@ -43,7 +48,7 @@ export function validateOpportunities(value: unknown, observedNpcIds: readonly s
   return value.map(item => {
     const o = record(item, 'vehicle opportunity'); onlyKeys(o, ['id', 'scenario', 'npcIds', 'detectedAt', 'facts'], 'vehicle opportunity');
     const id = uuid(o.id, 'opportunity id'); if (seen.has(id)) throw new AiError('invalid_payload', 'Duplicate vehicle opportunity.'); seen.add(id);
-    if (!(VEHICLE_SCENARIOS as readonly unknown[]).includes(o.scenario)) throw new AiError('invalid_payload', 'Unknown vehicle scenario.');
+    if (!isVehicleScenario(o.scenario) && !isStreetScenario(o.scenario)) throw new AiError('invalid_payload', 'Unknown vehicle scenario.');
     if (!Array.isArray(o.npcIds) || o.npcIds.length < 1 || o.npcIds.length > 3) throw new AiError('invalid_payload', 'A vehicle scenario needs one to three NPCs.');
     const npcIds = o.npcIds.map(v => boundedText(v, 128, 'scenario npcId'));
     if (new Set(npcIds).size !== npcIds.length || npcIds.some(n => !observedNpcIds.includes(n))) throw new AiError('invalid_payload', 'Scenario NPCs must be distinct observed NPCs.');
@@ -51,19 +56,24 @@ export function validateOpportunities(value: unknown, observedNpcIds: readonly s
     const f = record(o.facts, 'opportunity facts'); onlyKeys(f, ['playerInVehicle', 'playerSpeed', 'npcSpeed', 'wantedLevel', 'contact', 'npcFaction'], 'opportunity facts');
     if (typeof f.playerInVehicle !== 'boolean' || typeof f.contact !== 'boolean') throw new AiError('invalid_payload', 'Opportunity flags must be boolean.');
     const wanted = finite(f.wantedLevel, 0, 5, 'wantedLevel'); if (!Number.isInteger(wanted)) throw new AiError('invalid_payload', 'wantedLevel must be an integer.');
-    return { id, scenario: o.scenario as VehicleScenario, npcIds, detectedAt: o.detectedAt, facts: { playerInVehicle: f.playerInVehicle, playerSpeed: finite(f.playerSpeed, 0, 200, 'playerSpeed'), npcSpeed: finite(f.npcSpeed, 0, 200, 'npcSpeed'), wantedLevel: wanted, contact: f.contact, npcFaction: boundedText(f.npcFaction, 64, 'npcFaction') } };
+    return { id, scenario: o.scenario as AnyScenario, npcIds, detectedAt: o.detectedAt, facts: { playerInVehicle: f.playerInVehicle, playerSpeed: finite(f.playerSpeed, 0, 200, 'playerSpeed'), npcSpeed: finite(f.npcSpeed, 0, 200, 'npcSpeed'), wantedLevel: wanted, contact: f.contact, npcFaction: boundedText(f.npcFaction, 64, 'npcFaction') } };
   });
 }
 
 // Weighted admission. Disabled or zero-weight scenarios never start; already
-// handled opportunity IDs are skipped. `random` is injected for tests.
-export function admitOpportunity(opportunities: readonly VehicleOpportunity[], get: SettingsGetter, handled: ReadonlySet<string>, random: () => number = Math.random): VehicleOpportunity | null {
-  const eligible = opportunities.filter(o => !handled.has(o.id) && settingBoolean(get, `vehicles.${o.scenario}.enabled`, true) && settingNumber(get, `vehicles.${o.scenario}.weight`, 50) > 0);
-  const total = eligible.reduce((sum, o) => sum + settingNumber(get, `vehicles.${o.scenario}.weight`, 50), 0);
-  if (!eligible.length || total <= 0) return null;
+// handled opportunity IDs are skipped. Vehicle scenarios use vehicles.<id>.*;
+// street scenarios use director weights and multipliers. `random` is injected for tests.
+export function scenarioWeight(o: VehicleOpportunity, get: SettingsGetter, environment?: DirectorEnvironment): number {
+  if (isStreetScenario(o.scenario)) return streetWeight(o.scenario, get, environment);
+  return settingBoolean(get, `vehicles.${o.scenario}.enabled`, true) ? Math.max(0, settingNumber(get, `vehicles.${o.scenario}.weight`, 50)) : 0;
+}
+export function admitOpportunity(opportunities: readonly VehicleOpportunity[], get: SettingsGetter, handled: ReadonlySet<string>, random: () => number = Math.random, environment?: DirectorEnvironment): VehicleOpportunity | null {
+  const weighted = opportunities.filter(o => !handled.has(o.id)).map(o => ({ o, w: scenarioWeight(o, get, environment) })).filter(x => x.w > 0);
+  const total = weighted.reduce((sum, x) => sum + x.w, 0);
+  if (!weighted.length || total <= 0) return null;
   let roll = Math.min(0.999999, Math.max(0, random())) * total;
-  for (const o of eligible) { roll -= settingNumber(get, `vehicles.${o.scenario}.weight`, 50); if (roll < 0) return o; }
-  return eligible[eligible.length - 1];
+  for (const x of weighted) { roll -= x.w; if (roll < 0) return x.o; }
+  return weighted[weighted.length - 1].o;
 }
 
 export function scenarioSchema(npcIds: readonly string[], actions: readonly NpcAction[]) {
@@ -105,7 +115,7 @@ const FALLBACK: Record<VehicleScenario, { speech: string; prefer: NpcAction[] }>
   breakdown: { speech: 'Car just died on me. Know anything about engines?', prefer: ['TALK_CASUAL', 'USE_PHONE'] },
 };
 export function fallbackPlan(opportunity: VehicleOpportunity, allowed: ReadonlyMap<string, readonly NpcAction[]>): ScenarioPlan | null {
-  const npcId = opportunity.npcIds[0], actions = allowed.get(npcId) ?? [], spec = FALLBACK[opportunity.scenario];
+  const npcId = opportunity.npcIds[0], actions = allowed.get(npcId) ?? [], spec = isStreetScenario(opportunity.scenario) ? STREET_FALLBACK[opportunity.scenario] : FALLBACK[opportunity.scenario];
   const action = spec.prefer.find(a => actions.includes(a)); if (!action) return null;
   return { title: `Local fallback: ${opportunity.scenario}`, beats: [{ npcId, speech: spec.speech, voiceTone: 'plain', action }] };
 }

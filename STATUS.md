@@ -34,6 +34,12 @@
 
 **VERIFIED limitation — Step 5 scope:** by user decision, no Gemini TTS request was made and no audio device was opened, so audibility, spatial placement, first-audio latency and the Gemini response format (PCM vs WAV) are unmeasured. Ducking, following game volume, window-state muffling, facial animation and Windows pitch are not implemented. Only two female SAPI voices are installed. The line bank has not been refilled against the real provider.
 
-**BELIEVED:** the expanded director, performance testing and final installation/acceptance remain required; the overhaul is not complete. See `HANDOFF.md`.
+**VERIFIED — Step 6 offline gate passed on 3 October 2026 (22:23 +10:00):** `Test-NpcOverhaul.ps1 -Stage director` passed all ten checks: 212 backend tests (6 new street-scenario tests, 1 soak test), 111 C# tests (4 new street-policy groups), 193 resolved SDK references, 17 native names, audio-helper policy, installer/rollback, and a 4-hour simulated companion soak (28,800 frames, 1,440 scenario plans, 0 errors, at most 256 retained jobs). Evidence: `verification/npc-overhaul/director-20261003-222323/gate.json`. The ten NPC-focused street scenarios are detected from existing ambient NPCs (nothing is spawned) and planned through the Step 4 Lane B/D pipeline, weighted by `director.*` settings.
+
+**VERIFIED — soak defect found and fixed:** background director and memory jobs were never pruned. A 2-hour simulated run held 720 job records and was growing linearly. After the fix, a 4-hour run peaked at 256. The soak covers only the companion: fixture provider, simulated clock, memory pulses disabled.
+
+**VERIFIED limitation — Step 6 scope:** tick cost and frame time have not been measured; that needs the game. Panic and safe mode were not changed and have not been executed; that they work is BELIEVED from reading the code. Release packaging is blocked: `Package-Enhanced.ps1` needs `rg`, which is not installed, and `release-manifest.json` still pins the V3 DLL hash. Street scenes voice one NPC only. Grove/Forum district multipliers depend on zone names that have not been checked.
+
+**BELIEVED:** in-game acceptance (the test sheet) and a V4 release manifest/package remain required; the overhaul is not certified in the game. See `HANDOFF.md`.
 
 **GUESS:** no guessed compatibility, latency, audibility or gameplay result is used as acceptance evidence.

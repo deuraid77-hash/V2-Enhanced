@@ -52,7 +52,7 @@ namespace LivingLosSantosV2
         public Opportunity Offer(string scenario,string npcId,DateTime now)
         {
             Expire(now);
-            if(!VehiclePolicy.Known(scenario)||String.IsNullOrEmpty(npcId)||open.Count>=MaxOpen)return null;
+            if(!ScenarioCatalog.Known(scenario)||String.IsNullOrEmpty(npcId)||open.Count>=MaxOpen)return null;
             DateTime prior;
             if(scenarioAt.TryGetValue(scenario,out prior)&&now-prior<ScenarioCooldown)return null;
             if(npcAt.TryGetValue(npcId,out prior)&&now-prior<NpcCooldown)return null;
@@ -81,7 +81,7 @@ namespace LivingLosSantosV2
         // Validates the whole plan before anything runs; a single bad beat rejects all.
         public static List<ScenarioBeat> Parse(Dictionary<string,object> payload,string jobId,string runtimeId,string sceneEpoch,DateTime now)
         {
-            string scenario=Wire.Text(payload,"scenario",32);if(!VehiclePolicy.Known(scenario))throw new InvalidOperationException("Unknown vehicle scenario.");
+            string scenario=Wire.Text(payload,"scenario",32);if(!ScenarioCatalog.Known(scenario))throw new InvalidOperationException("Unknown scenario.");
             var raw=Wire.Maps(Wire.Value(payload,"beats")).Take(MaxBeats+1).ToArray();
             if(raw.Length<1||raw.Length>MaxBeats)throw new InvalidOperationException("Scenario beat count is outside its bound.");
             var beats=new List<ScenarioBeat>();

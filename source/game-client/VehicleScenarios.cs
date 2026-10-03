@@ -18,6 +18,7 @@ namespace LivingLosSantosV2
         private readonly Dictionary<string,Dictionary<string,object>> scenarioFacts=new Dictionary<string,Dictionary<string,object>>();
         private readonly Dictionary<string,Ped> scenarioPeds=new Dictionary<string,Ped>();
         private Dictionary<int,int> vehicleHealthSeen=new Dictionary<int,int>();
+        private Dictionary<int,float> streetDistanceSeen=new Dictionary<int,float>();
         private readonly HashSet<string> creditedContacts=new HashSet<string>();
         private ScenarioRun scenarioRun;
         private DateTime nextVehicleScan=DateTime.MinValue;
@@ -51,8 +52,12 @@ namespace LivingLosSantosV2
             float playerSpeed=Bounded(playerCar!=null?playerCar.Speed:player.Speed);
             bool seatFree=playerCar!=null&&playerCar.IsSeatFree(VehicleSeat.Passenger);
             double windowMeters=npcSettings.Number("vehicles.windowTalkMeters"),chatSpeed=npcSettings.Number("conversation.vehicleMaxSpeed");
-            var health=new Dictionary<int,int>();
-            foreach(Ped ped in World.GetNearbyPeds(player,VehicleScanMeters).Where(p=>p.Exists()&&p.IsHuman&&p.Handle!=player.Handle).OrderBy(p=>p.Position.DistanceToSquared(player.Position)).Take(16))
+            var health=new Dictionary<int,int>();var distances=new Dictionary<int,float>();
+            Ped[] scanned=World.GetNearbyPeds(player,VehicleScanMeters).Where(p=>p.Exists()&&p.IsHuman&&p.Handle!=player.Handle).OrderBy(p=>p.Position.DistanceToSquared(player.Position)).Take(16).ToArray();
+            Ped[] onFoot=scanned.Where(p=>p.IsAlive&&p.IsOnFoot).ToArray();
+            bool night=StreetPolicy.IsNight(GTA.Chrono.GameClock.Hour),gunfireNow=now-recentGunfire<TimeSpan.FromSeconds(8),gunfireRecent=!gunfireNow&&now-recentGunfire<TimeSpan.FromSeconds(90);
+            bool playerArmed=player.IsArmed(WeaponCheckFlags.IncludeGun);
+            foreach(Ped ped in scanned)
             {
                 if(!metrics.HasBudget(npcSettings.Number("performance.tickBudgetMs")))break;
                 if(!ped.IsAlive)continue;
@@ -80,14 +85,29 @@ namespace LivingLosSantosV2
                     VehicleProtected=near!=null&&near.IsPersistent,NpcInCombat=ped.IsInCombat,
                     PlayerSpeed=playerSpeed,NpcSpeed=Bounded(inVehicle?car.Speed:ped.Speed),Distance=ped.Position.DistanceTo(player.Position),Wanted=wanted};
                 string scenario=VehiclePolicy.Classify(facts,windowMeters,chatSpeed,VehicleScanMeters);
-                if(scenario==null||!npcSettings.Flag("vehicles."+scenario+".enabled"))continue;
+                if(scenario!=null&&!npcSettings.Flag("vehicles."+scenario+".enabled"))scenario=null;
+                if(scenario==null&&!inVehicle)
+                {
+                    var street=new StreetPolicy.Facts{
+                        PlayerInVehicle=facts.PlayerInVehicle,NpcInVehicle=false,NpcOnFoot=ped.IsOnFoot,NpcIsCop=facts.NpcIsCop,NpcGang=facts.NpcGang,
+                        NpcProtected=facts.NpcProtected,NpcInCombat=facts.NpcInCombat,NpcFleeing=ped.IsFleeing,PlayerArmed=playerArmed,
+                        PlayerTargetingNpc=playerArmed&&Game.Player.IsTargeting(ped),GunfireNow=gunfireNow,RecentGunfire=gunfireRecent,Night=night,Wanted=wanted,
+                        Neighbours=onFoot.Count(o=>o.Handle!=ped.Handle&&o.Position.DistanceTo(ped.Position)<=StreetPolicy.NeighbourMeters),
+                        CiviliansNearCop=facts.NpcIsCop?onFoot.Count(o=>o.Handle!=ped.Handle&&o.PedType!=PedType.Cop&&o.Position.DistanceTo(ped.Position)<=StreetPolicy.NeighbourMeters):0,
+                        Distance=facts.Distance,NpcSpeed=facts.NpcSpeed};
+                    float before;street.Closing=streetDistanceSeen.TryGetValue(ped.Handle,out before)?before-facts.Distance:0f;
+                    string candidate=StreetPolicy.Classify(street,VehicleScanMeters);
+                    if(candidate!=null&&npcSettings.Number("director."+candidate+"Weight")>0)scenario=candidate;
+                }
+                distances[ped.Handle]=facts.Distance;
+                if(scenario==null)continue;
                 var opportunity=scenarioGate.Offer(scenario,NpcId(ped),now);
                 if(opportunity==null)continue;
                 scenarioFacts[opportunity.Id]=new Dictionary<string,object>{{"playerInVehicle",facts.PlayerInVehicle},{"playerSpeed",facts.PlayerSpeed},{"npcSpeed",facts.NpcSpeed},{"wantedLevel",Math.Max(0,Math.Min(5,wanted))},{"contact",facts.Contact},{"npcFaction",ResponsePolicy.CleanText(faction,64).Length==0?"Civilian/Unknown":ResponsePolicy.CleanText(faction,64)}};
                 scenarioPeds[opportunity.Id]=ped;
                 Observe(ped);
             }
-            vehicleHealthSeen=health;
+            vehicleHealthSeen=health;streetDistanceSeen=distances;
         }
 
         // Only opportunities whose NPC is in this exact packet are valid for the companion.
@@ -136,7 +156,7 @@ namespace LivingLosSantosV2
                 if(message==null)
                 {
                     Caption(SpeakerName(ped)+" ["+run.Source+"]: "+beat.Speech,(int)(ScenarioBeatSeconds*1000)+1500);
-                    QueueVoiceCue(ped,beat.NpcId,beat.Speech,beat.Tone,"vehicle",run.Source,"B");
+                    QueueVoiceCue(ped,beat.NpcId,beat.Speech,beat.Tone,ScenarioCatalog.VoiceCategory(run.Scenario),run.Source,"B");
                     Emit("dialogue","NPC "+ped.Handle+" ["+run.Source+"]: "+beat.Speech,null,director.Faction(ped));
                     return;
                 }
@@ -157,7 +177,7 @@ namespace LivingLosSantosV2
         private void ClearVehicleScenarios(string reason)
         {
             EndScenario(reason);
-            scenarioGate.Clear();scenarioFacts.Clear();scenarioPeds.Clear();vehicleHealthSeen.Clear();
+            scenarioGate.Clear();scenarioFacts.Clear();scenarioPeds.Clear();vehicleHealthSeen.Clear();streetDistanceSeen.Clear();
         }
     }
 }

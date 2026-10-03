@@ -31,9 +31,11 @@ try {
   Invoke-NpcCheck 'client-audit' { & '.\game-client\Audit-EnhancedClient.ps1' }
   Invoke-NpcCheck 'audio-policy' { & '.\audio-host\Build-AudioHost.ps1' -SelfTest }
   Invoke-NpcCheck 'installer-rollback' { & (Join-Path $taskRoot 'Test-WorldInstaller.ps1') }
+  if ($Stage -eq 'director' -or $Stage -eq 'release') { Invoke-NpcCheck 'companion-soak' { & node.exe --import tsx scripts/soak-companion.ts --hours 4 --out (Join-Path $taskEvidence 'companion-soak.json') } }
 } finally {
   Pop-Location
-  $taskReport=[ordered]@{checkedAt=[DateTime]::UtcNow.ToString('o');stage=$Stage;classification='VERIFIED';checks=$taskChecks.ToArray();passed=($taskChecks.Count -eq 9 -and @($taskChecks | Where-Object {-not $_.passed}).Count -eq 0);gameExecuted=$false;providerCalled=$false;nativeControllerTested=$false;nativeAudioHeard=$false;evidenceDirectory=$taskEvidence}
+  $taskExpected=if ($Stage -eq 'director' -or $Stage -eq 'release') {10} else {9}
+  $taskReport=[ordered]@{checkedAt=[DateTime]::UtcNow.ToString('o');stage=$Stage;classification='VERIFIED';checks=$taskChecks.ToArray();passed=($taskChecks.Count -eq $taskExpected -and @($taskChecks | Where-Object {-not $_.passed}).Count -eq 0);gameExecuted=$false;providerCalled=$false;nativeControllerTested=$false;nativeAudioHeard=$false;evidenceDirectory=$taskEvidence}
   $taskReport | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $taskEvidence 'gate.json') -Encoding utf8
 }
 Write-Output ('Offline stage checks complete: '+$taskEvidence)
