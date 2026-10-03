@@ -1,0 +1,16 @@
+<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <OutputType>Library</OutputType><TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <AssemblyName>LivingLSAIsV2.Enhanced</AssemblyName><RootNamespace>LivingLosSantosV2</RootNamespace>
+    <OutputPath>bin\</OutputPath><PlatformTarget>AnyCPU</PlatformTarget><Optimize>true</Optimize>
+    <GameRoot Condition="'$(GameRoot)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Grand Theft Auto V Enhanced</GameRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System"/><Reference Include="System.Core"/><Reference Include="System.Windows.Forms"/>
+    <Reference Include="System.Net.Http"/><Reference Include="System.Web.Extensions"/>
+    <Reference Include="ScriptHookVDotNet3"><HintPath>$(GameRoot)\ScriptHookVDotNet3.dll</HintPath><Private>False</Private></Reference>
+    <Compile Include="WorldPolicy.cs"/><Compile Include="WorldDirector.cs"/><Compile Include="ResponsePolicy.cs"/><Compile Include="DashboardTransport.cs"/><Compile Include="LivingLSAIsV2.Enhanced.cs"/>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
+</Project>
+

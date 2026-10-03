@@ -1,0 +1,48 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with GTA V mod preferences and cloud sync settings.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "Display nickname" },
+        "preferredFaction": { "type": "string", "description": "Pledged allegiance faction" },
+        "savedGameVersion": { "type": "string", "description": "Target GTA V version e.g. 1.0.1158.16" },
+        "createdAt": { "type": "string", "description": "Account registration timestamp" }
+      },
+      "required": ["uid", "email"]
+    },
+    "NPCMemoryDocument": {
+      "title": "NPCMemoryDocument",
+      "description": "Persistent long-term memories and grudges for an NPC belonging to a user session.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner user UID" },
+        "npcId": { "type": "string", "description": "Identifier of the NPC" },
+        "grudgeActive": { "type": "boolean", "description": "Whether a grudge is active" },
+        "grudgeReason": { "type": "string", "description": "Reason for the grudge" },
+        "grudgeSeverity": { "type": "string", "description": "NONE, MILD, VENGEFUL, BLOOD_FEUD" },
+        "allianceActive": { "type": "boolean", "description": "Whether sworn alliance is active" },
+        "allianceLevel": { "type": "string", "description": "NONE, CASUAL_FRIEND, TRUSTED_ASSOCIATE, RIDE_OR_DIE" },
+        "incidents": {
+          "type": "string",
+          "description": "Serialized JSON array of memory incidents"
+        },
+        "lastUpdated": { "type": "string", "description": "Last encounter timestamp" }
+      },
+      "required": ["userId", "npcId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Public user profile document."
+    },
+    "/users/{userId}/npc_memories/{npcId}": {
+      "schema": { "$ref": "#/entities/NPCMemoryDocument" },
+      "description": "User's individual NPC long-term memory records."
+    }
+  }
+}

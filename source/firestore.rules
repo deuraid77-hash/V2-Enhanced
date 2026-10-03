@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default Deny All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Connection testing doc
+    match /test/connection {
+      allow read: if true;
+    }
+
+    // User Profile
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow create: if isOwner(userId) && isValidId(userId)
+        && request.resource.data.uid == userId;
+      allow update: if isOwner(userId) && isValidId(userId)
+        && request.resource.data.uid == userId;
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      // NPC Memories subcollection
+      match /npc_memories/{npcId} {
+        allow read: if isOwner(userId) && isValidId(userId) && isValidId(npcId);
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(npcId)
+          && request.resource.data.userId == userId;
+        allow update: if isOwner(userId) && isValidId(userId) && isValidId(npcId)
+          && request.resource.data.userId == userId;
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(npcId);
+      }
+    }
+  }
+}

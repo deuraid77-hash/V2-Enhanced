@@ -1,0 +1,6 @@
+{
+  "name": "Living Los Santos AI v2 - GTA V Next-Gen NPC & Tactical Combat Engine",
+  "description": "Next-generation GTA V AI modification featuring advanced machine learning for realistic NPC behaviors, adaptive combat tactics, real-time Gemini LLM dialogue, dynamic environmental reactions, and living faction allegiances.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
