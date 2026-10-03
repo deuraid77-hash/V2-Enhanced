@@ -101,6 +101,7 @@ internal static class OfflineTests
         WorldPolicyTests.Run(Check);
         FoundationTests.Run(Check);
         MenuPolicyTests.Run(Check);
+        VehiclePolicyTests.Run(Check);
         string json=new JavaScriptSerializer().Serialize(new { checkedAt=DateTime.UtcNow.ToString("o"), total=Results.Count, passed=Results.Count-failed, failed=failed, gameExecuted=false, realApiCalled=false, tests=Results });
         if(args.Length>0) File.WriteAllText(args[0],json,Encoding.UTF8);
         Console.WriteLine((Results.Count-failed)+"/"+Results.Count+" passed");

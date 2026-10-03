@@ -66,20 +66,29 @@ BELIEVED — Each action below must produce a real, bounded behavior when its co
 
 ## Ten vehicle scenarios
 
-For every row: verify dialogue is grounded in the actual vehicle/seat and current scene. Then deliberately cancel, leave the area, change vehicle or change seats. No mission/other-mod entity may be taken over, no stale result may target a replacement vehicle, and the created-entity count must return to its starting value after owned cleanup.
+Implementation boundary: scenarios use only peds and vehicles already in the world. Nothing is spawned, warped or deleted, so the created-entity count must not change at all. One scene runs at a time, made of 1–4 beats about 3.5 s apart. Each beat is one subtitle line (`LLS: <name> [gemini|fallback]: …`) plus one catalogue action. Scenario start, finish and end reasons appear as `vehicle_scenario` events in the portal event list.
 
-| Scenario | Human check |
-|---|---|
-| 1. Window talk | On foot, approach a driver then a passenger. Speech comes from the correct window and ends outside its range. |
-| 2. Car-to-car | Stop or travel slowly beside another car. Confirm speed/distance gate and cancellation when traffic separates. |
-| 3. Passenger chat | Speak while passenger or to your passenger; correctly identify driver vs passenger and available seats. |
-| 4. Lifts/hitchhikers | Accept, board safely, travel to an approved destination, finish or cancel; no unexplained warp. |
-| 5. Road rage | Trigger a near miss/honk/tailgate incident. Confirm AI response and bounded confrontation/chase/drive-away. |
-| 6. Carjack reactions | Observe distinct victim, passenger and nearby witness reactions; protected vehicles remain excluded. |
-| 7. Pedestrian impact | Observe struck-ped and witness responses, including cancellation if a participant disappears. |
-| 8. Traffic stop | Exercise police/civilian dialogue, refusal, threat and bribe contexts; wanted effects follow the configured rules. |
-| 9. Drive-by/gang cruising | Confirm actual territory/faction context and owned participant caps. No global relationship edits. |
-| 10. Breakdown help | Observe a valid breakdown scene, offer help or refuse, complete/abandon it and verify cleanup. |
+For every row:
+- Confirm the subtitle source label (`gemini` or `fallback`).
+- Then cancel: walk/drive away, press panic, or use portal Clear. The scene must stop with an end reason, and no further beat may run.
+- A mission-persistent ped or vehicle must never be selected. Do one row during a story mission to confirm nothing triggers.
+
+Detection only offers each NPC once per 120 s and each scenario once per 45 s. Wait between attempts.
+
+| Scenario | How to trigger | Expected |
+|---|---|---|
+| 1. Window talk | On foot, stand ≤ `vehicles.windowTalkMeters` (default 4 m) from a stopped NPC car. | Occupant speaks; action is `TALK_CASUAL`/`WAVE_OFF`/vehicle-compatible only. |
+| 2. Car-to-car | In a car, stop or crawl (≤ `conversation.vehicleMaxSpeed`) within 6 m of an NPC driver. | Driver speaks; honk/drive-away only if they are the driver. |
+| 3. Passenger chat | Have an NPC in your own vehicle. | **Expected to not start.** The existing safety rule excludes NPCs in the player's vehicle from every action, so the companion admits no plan. Record whether anything appears. |
+| 4. Lifts | Stop your car (≤ 1 m/s) with the front passenger seat free, ≤ 8 m from a pedestrian. | `ASK_FOR_RIDE` or talk. No forced entry, no destination travel (not implemented). |
+| 5. Road rage | Bump an NPC-driven car at low speed. | Driver honks/threatens/exits to confront within lease timeout; no chase is created. |
+| 6. Carjack | Jack an NPC driver (F / Y). | Victim reacts (flee, call 911, plead). Witness reactions are not separate scenarios in this build. |
+| 7. Pedestrian impact | Clip a pedestrian with your vehicle without killing them. | Struck ped reacts (911/flee/talk). Requires the hit to register within one scan second. |
+| 8. Traffic stop | Get a 1-star wanted level near an ambient officer on foot or in a stopped car (≤ 12 m). | Officer line + intimidate/talk. No bribe logic exists; wanted level is not altered by the scene. |
+| 9. Drive-by / cruising | Stand near a slow (≤ 8 m/s) Families/Ballas/Vagos car (≤ 25 m). | Threaten/honk from car. No weapons are fired by the scene itself; no relationship edits. |
+| 10. Breakdown | Find an NPC on foot within 8 m of their wrecked last vehicle (engine health < 300 or undriveable), ≤ 12 m from you. | NPC asks for help / uses phone. An NPC still sitting in an undriveable car gets no actions, because the existing guard requires a driveable vehicle. No repair or completion flow exists. |
+
+Also record `director.log` lines starting `Vehicle scenario rejected:` if any appear.
 
 ## Voice and transcripts
 

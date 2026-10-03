@@ -103,7 +103,7 @@ namespace LivingLosSantosV2
                 UpdateScene(player,pause);
                 bool canMenu=nativeMenu.IsOpen||CanOpenMenu(player);
                 foreach(string action in input.Poll(npcSettings,keyboardTarget!=null||nativeMenu.KeyboardOpen,storyModeReady&&!nativeMenu.IsOpen&&canMenu,canMenu)) {
-                    if(action=="panic") { panic=true; pause="Panic stop active; restart the script to resume"; storyModeReady=false; UpdateScene(player,pause); CancelConversation("Panic stop"); CancelKeyboard(); nativeMenu.PanicStop(); director.Clear("Panic stop"); promptRequested=false; toggleRequested=false; Caption("Panic stop: owned scenarios and AI cancelled.",5000); break; }
+                    if(action=="panic") { panic=true; pause="Panic stop active; restart the script to resume"; storyModeReady=false; UpdateScene(player,pause); CancelConversation("Panic stop"); CancelKeyboard(); nativeMenu.PanicStop(); director.Clear("Panic stop"); ClearVehicleScenarios("Panic stop"); promptRequested=false; toggleRequested=false; Caption("Panic stop: owned scenarios and AI cancelled.",5000); break; }
                     else if(action=="talk"&&!dialoguePending&&keyboardTarget==null) promptRequested=true;
                     else if(action=="director") toggleRequested=true;
                     else if(action=="menu") ToggleMenu(player);
@@ -115,6 +115,7 @@ namespace LivingLosSantosV2
                 pause=EffectivePause(player); storyModeReady=pause==null; UpdateScene(player,pause);
                 CheckConversation(player,pause);
                 TickNpcActions(player,pause);
+                TickVehicles(player,pause);
                 TickMind(player,pause);
                 TickConversationUI(player,pause);
                 TickPtt(player,pause);
@@ -174,7 +175,7 @@ namespace LivingLosSantosV2
             bool hard=pause!=null&&pause!="Game paused"&&pause!="Dialogue keyboard open"&&pause!="Native menu open"&&pause!="Reply wheel open";
             int handle=player!=null&&player.Exists()?player.Handle:0;
             if((hard&&lastHardPause!=pause)||(lastPlayerHandle!=0&&handle!=lastPlayerHandle)) {
-                sceneEpoch=Guid.NewGuid().ToString("N"); registeredEpoch=null; CancelConversation("Scene changed"); CancelKeyboard(); observedNpcs.Clear(); scanCandidates.Clear(); seen.Clear(); nextScan=DateTime.MinValue;
+                sceneEpoch=Guid.NewGuid().ToString("N"); registeredEpoch=null; CancelConversation("Scene changed"); CancelKeyboard(); ClearVehicleScenarios("Scene changed"); observedNpcs.Clear(); scanCandidates.Clear(); seen.Clear(); nextScan=DateTime.MinValue;
             }
             lastHardPause=hard?pause:null; lastPlayerHandle=handle;
         }
@@ -256,6 +257,7 @@ namespace LivingLosSantosV2
                 var payload=Wire.Map(Wire.Value(update,"payload"));
                 if(kind=="persona"||kind=="memory"){if(pause==null&&npcSettings.Flag("memory.enabled")&&(status=="completed"||status=="fallback"))ConsumeMindUpdate(update,payload,player);return;}
                 if(kind=="quickReplies"){if(status=="completed"||status=="fallback")ConsumeQuickReplies(update,payload,player);return;}
+                if(kind=="scenario"){try{ConsumeScenario(update,payload,player,pause);}catch(InvalidOperationException ex){Log("Vehicle scenario rejected: "+ResponsePolicy.CleanText(ex.Message,240));}return;}
                 if(conversation==null||conversation.JobId!=jobId||!ValidJobTarget(conversation,player)||pause!=null) return;
                 if(kind=="speech") { Caption("NPC ["+ResponsePolicy.CleanText(source,40)+"]: "+ResponsePolicy.CleanText(Wire.Text(payload,"speech",800),800),6000); return; }
                 if(status=="failed"||status=="cancelled"||status=="rejected") { CancelConversation("AI job "+status+"."); return; }
@@ -310,7 +312,7 @@ namespace LivingLosSantosV2
                 id=Wire.Text(command,"id",128); string error;
                 if(!commands.TryClaim(command,runtimeId,DateTime.UtcNow,out error)) { if(error!=null) Acknowledge(id,false,error); return; }
                 string type=Wire.Text(command,"type",32); var payload=Wire.Map(Wire.Value(command,"payload"));
-                if(type=="clear_events") { director.Clear("Cleared from the live portal"); ClearNpcActions("Cleared from the live portal"); Acknowledge(id,true,"Owned encounters cleared."); return; }
+                if(type=="clear_events") { director.Clear("Cleared from the live portal"); ClearNpcActions("Cleared from the live portal"); ClearVehicleScenarios("Cleared from the live portal"); Acknowledge(id,true,"Owned encounters cleared."); return; }
                 if(pause!=null||!WorldDirector.Alive(player)) { Acknowledge(id,false,pause??"Player unavailable."); return; }
                 if(type=="start_turf_war") { error=director.StartTurf(player,Wire.Text(payload,"districtId",32),Wire.Text(payload,"attacker",32),id,Wire.Timestamp(command,"expiresAt")); if(error!=null) Acknowledge(id,false,error); return; }
                 if(type=="start_street_fight") { error=director.StartStreet(player,id,Wire.Timestamp(command,"expiresAt")); if(error!=null) Acknowledge(id,false,error); return; }
@@ -369,7 +371,7 @@ namespace LivingLosSantosV2
             var packet=new Dictionary<string,object>{{"protocol",4},{"runtimeId",runtimeId},{"sceneEpoch",sceneEpoch},{"pluginVersion",PluginVersion},{"gameVersion",compatibility.GameFileVersion},{"sdkGameVersion",Game.FileVersion.ToString()},
                 {"appliedRevision",Math.Max(0,appliedRevision)},{"player",available?DescribePlayer(player):null},{"environment",available?DescribeEnvironment(player):null},
                 {"npcs",npcs.ToArray()},{"director",director.Snapshot()},{"events",events},{"acknowledgements",acks},{"appliedNpcRevision",Math.Max(0,npcSettings.Revision)},
-                {"aiReceipts",receipts},{"aiOutcomes",outcomes},{"aiMindOutcomes",mindAcks},{"witnessedEvents",witnesses},{"appliedMemoryRevision",appliedMemoryRevision},{"appliedReputationRevision",appliedReputationRevision},{"compatibility",compatibility.Snapshot(Game.FileVersion.ToString())},{"tickMetrics",metrics.Snapshot()},{"inputDevice",input.Controller?"controller":"keyboard"}};
+                {"aiReceipts",receipts},{"aiOutcomes",outcomes},{"aiMindOutcomes",mindAcks},{"witnessedEvents",witnesses},{"appliedMemoryRevision",appliedMemoryRevision},{"appliedReputationRevision",appliedReputationRevision},{"compatibility",compatibility.Snapshot(Game.FileVersion.ToString())},{"tickMetrics",metrics.Snapshot()},{"inputDevice",input.Controller?"controller":"keyboard"},{"vehicleOpportunities",available?VehicleOpportunityPacket(npcs):new object[0]}};
             string json=serializer.Serialize(packet);
             // The server's limit is UTF-8 bytes, while JavaScriptSerializer limits characters.
             // Keep unsent acknowledgements/events queued; send a smaller observed NPC subset if required.
@@ -381,7 +383,7 @@ namespace LivingLosSantosV2
                 else if(mindAcks.Length>0) { mindAcks=mindAcks.Take(mindAcks.Length/2).ToArray();packet["aiMindOutcomes"]=mindAcks; }
                 else if(witnesses.Length>0) { witnesses=witnesses.Take(witnesses.Length/2).ToArray();packet["witnessedEvents"]=witnesses; }
                 else if(receipts.Length>0) { receipts=receipts.Take(receipts.Length/2).ToArray(); packet["aiReceipts"]=receipts; }
-                else if(npcs.Count>0) { npcs.RemoveAt(npcs.Count-1); packet["npcs"]=npcs.ToArray(); }
+                else if(npcs.Count>0) { npcs.RemoveAt(npcs.Count-1); packet["npcs"]=npcs.ToArray(); packet["vehicleOpportunities"]=available?VehicleOpportunityPacket(npcs):new object[0]; }
                 else throw new InvalidOperationException("World snapshot exceeded the local exchange budget.");
                 json=serializer.Serialize(packet);
             }
@@ -393,7 +395,7 @@ namespace LivingLosSantosV2
             NpcMemory memory=Memory(ped,true); string faction=director.Faction(ped); int damage=Math.Max(0,memory.LastHealth-ped.Health); memory.LastHealth=ped.Health;
             return new Dictionary<string,object>{{"id",NpcId(ped)},{"handle",ped.Handle},{"name",SpeakerName(ped)},{"faction",faction},{"factionVerified",faction!="Civilian/Unknown"},
                 {"archetype",faction=="Civilian/Unknown"?"Nearby pedestrian; affiliation unknown":"Observed "+faction+" pedestrian"},{"position",Position(ped.Position)},{"health",ped.Health},{"alive",ped.IsAlive},
-                {"modelHash",ped.Model.Hash},{"identity",ObserveIdentity(ped,memory)},{"inVehicle",ped.IsInVehicle()},{"availableActions",AvailableActions(ped,Game.Player.Character)},{"inCombat",ped.IsInCombat},{"owned",ModOwns(ped)},{"weapon",ped.Weapons.Current==null?"Unarmed":ped.Weapons.Current.Hash.ToString()},{"memory",memory.Note},
+                {"modelHash",ped.Model.Hash},{"identity",ObserveIdentity(ped,memory)},{"inVehicle",ped.IsInVehicle()},{"vehicle",DescribeVehicle(ped)},{"availableActions",AvailableActions(ped,Game.Player.Character)},{"inCombat",ped.IsInCombat},{"owned",ModOwns(ped)},{"weapon",ped.Weapons.Current==null?"Unarmed":ped.Weapons.Current.Hash.ToString()},{"memory",memory.Note},
                 {"mind",memory.Mind.Snapshot()},{"fear",memory.Mind.Fear},{"aggression",memory.Mind.Aggression},{"morale",memory.Mind.Morale},{"longTermMemory",memory.Note},
                 {"recentDamage",Math.Min(10000,damage)},{"recentEvents",damage>0?new[]{"Observed health loss: "+damage}:new string[0]},{"distance",ped.Position.DistanceTo(Game.Player.Character.Position)}};
         }
@@ -468,6 +470,7 @@ namespace LivingLosSantosV2
             try { CancelKeyboard(); } catch { }
             try { if(nativeMenu!=null)nativeMenu.Close(); } catch { }
             try { ClearNpcActions("Script unloading"); ReleaseNotables(true); } catch { }
+            try { ClearVehicleScenarios("Script unloading"); } catch { }
             try { RestoreWeapons(true); } catch { Log("A temporary weapon selection could not be restored during abort."); }
             try { director.Dispose(); SaveCampaign(); } catch(Exception ex) { Log("Abort cleanup: "+ex.GetType().Name); }
             cancellation.Cancel(); transport.Dispose(); Completion item; while(completed.TryDequeue(out item)) {}
