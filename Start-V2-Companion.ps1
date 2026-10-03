@@ -7,7 +7,7 @@ function Get-CompanionHealth {
   try { return Invoke-RestMethod -Uri ($taskUrl + '/api/health') -TimeoutSec 2 } catch { return $null }
 }
 function Test-Companion([object]$Health) {
-  return $null -ne $Health -and $Health.mode -eq 'enhanced-companion' -and $Health.version -match '^3\.' -and $Health.worldRuntime.protocol -eq 3
+  return $null -ne $Health -and $Health.mode -eq 'enhanced-companion' -and $Health.version -match '^4\.' -and $Health.worldRuntime.protocol -eq 4
 }
 $taskExistingHealth = Get-CompanionHealth
 if (Test-Companion $taskExistingHealth) {
@@ -16,7 +16,7 @@ if (Test-Companion $taskExistingHealth) {
   return
 }
 if ($null -ne $taskExistingHealth -and $taskExistingHealth.mode -eq 'enhanced-companion') {
-  throw 'An incompatible Living Los Santos companion is already running on port 3000. Stop the older companion with its own Stop-V2-Companion.ps1, then start this version 3 launcher. The running process was preserved.'
+  throw 'An incompatible Living Los Santos companion is already running on port 3000. Stop the older companion with its own Stop-V2-Companion.ps1, then start this version 4 launcher. The running process was preserved.'
 }
 if (Get-NetTCPConnection -State Listen -LocalPort 3000 -ErrorAction SilentlyContinue) { throw 'Another application is using port 3000. Stop it or change the companion/client configuration together.' }
 $taskNode = (Get-Command node.exe -ErrorAction Stop).Source
