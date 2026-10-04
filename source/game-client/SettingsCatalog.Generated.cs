@@ -21,6 +21,7 @@ public static class SettingsCatalog {
   new SettingDefinition { Key="general.debugOverlay",Label="Debug Overlay",Group="General",Kind="boolean",Default=false,Min=0d,Max=0d,Step=1d,Options=new string[]{},Tooltip="Show measured script Tick cost and job counts.",Consumer="game" },
   new SettingDefinition { Key="general.menuSounds",Label="Menu Sounds",Group="General",Kind="boolean",Default=true,Min=0d,Max=0d,Step=1d,Options=new string[]{},Tooltip="Play game menu navigation cues.",Consumer="game" },
   new SettingDefinition { Key="general.safeMode",Label="Safe Mode",Group="General",Kind="boolean",Default=false,Min=0d,Max=0d,Step=1d,Options=new string[]{},Tooltip="Keep only menu and diagnostics active; cancel world and NPC work.",Consumer="game" },
+  new SettingDefinition { Key="general.subtitles",Label="Subtitles",Group="General",Kind="boolean",Default=true,Min=0d,Max=0d,Step=1d,Options=new string[]{},Tooltip="Show NPC conversation subtitles on screen.",Consumer="game" },
   new SettingDefinition { Key="ai.enabled",Label="Enabled",Group="AI",Kind="boolean",Default=true,Min=0d,Max=0d,Step=1d,Options=new string[]{},Tooltip="Allow provider jobs, subject to the combined daily budget.",Consumer="ai" },
   new SettingDefinition { Key="ai.provider",Label="Provider",Group="AI",Kind="select",Default="gemini",Min=0d,Max=0d,Step=1d,Options=new string[]{"gemini","offline"},Tooltip="Provider used for text jobs. Offline mode uses explicitly labelled fallback.",Consumer="ai" },
   new SettingDefinition { Key="ai.liveModel",Label="Live Model",Group="AI",Kind="text",Default="gemini-3.8-flash",Min=0d,Max=0d,Step=1d,Options=new string[]{},Tooltip="Model used for streamed live NPC conversation.",Consumer="ai" },
@@ -66,7 +67,9 @@ public static class SettingsCatalog {
   new SettingDefinition { Key="conversation.language",Label="Language",Group="Conversation",Kind="text",Default="English",Min=0d,Max=0d,Step=1d,Options=new string[]{},Tooltip="Requested dialogue and transcription language; bounded to 40 characters.",Consumer="game" },
   new SettingDefinition { Key="conversation.prewarmMeters",Label="Prewarm Meters",Group="Conversation",Kind="number",Default=12d,Min=5d,Max=30d,Step=1d,Options=new string[]{},Tooltip="Distance at which eligible nearby NPC personas may be prepared.",Consumer="game" },
   new SettingDefinition { Key="conversation.maxTurns",Label="Max Turns",Group="Conversation",Kind="number",Default=12d,Min=2d,Max=30d,Step=1d,Options=new string[]{},Tooltip="Maximum turns before the conversation wraps up.",Consumer="game" },
-  new SettingDefinition { Key="conversation.pushToTalk",Label="Push To Talk",Group="Conversation",Kind="boolean",Default=false,Min=0d,Max=0d,Step=1d,Options=new string[]{},Tooltip="Enable microphone capture only while the talk control is held.",Consumer="game" },
+  new SettingDefinition { Key="conversation.pushToTalk",Label="Push To Talk",Group="Conversation",Kind="boolean",Default=true,Min=0d,Max=0d,Step=1d,Options=new string[]{},Tooltip="Talk to NPCs with your voice. The microphone is captured only while the talk control is held.",Consumer="game" },
+  new SettingDefinition { Key="conversation.tapToTalk",Label="Tap To Talk",Group="Conversation",Kind="boolean",Default=false,Min=0d,Max=0d,Step=1d,Options=new string[]{},Tooltip="Tap the talk control once to start listening; capture stops after a short silence.",Consumer="game" },
+  new SettingDefinition { Key="conversation.typedFallback",Label="Typed Fallback",Group="Conversation",Kind="boolean",Default=false,Min=0d,Max=0d,Step=1d,Options=new string[]{},Tooltip="Hidden fallback for players without a microphone: typed talk key and controller reply wheel.",Consumer="game" },
   new SettingDefinition { Key="memory.enabled",Label="Enabled",Group="Mind and memory",Kind="boolean",Default=true,Min=0d,Max=0d,Step=1d,Options=new string[]{},Tooltip="Use bounded working, episode and summary memory.",Consumer="memory" },
   new SettingDefinition { Key="memory.maxNpcs",Label="Max Npcs",Group="Mind and memory",Kind="number",Default=200d,Min=16d,Max=500d,Step=1d,Options=new string[]{},Tooltip="Maximum stored NPC mind records; oldest unprotected records are evicted.",Consumer="memory" },
   new SettingDefinition { Key="memory.maxEpisodesPerNpc",Label="Max Episodes Per Npc",Group="Mind and memory",Kind="number",Default=24d,Min=4d,Max=64d,Step=1d,Options=new string[]{},Tooltip="Bound the episode notes retained for one NPC.",Consumer="memory" },
@@ -274,5 +277,61 @@ public static class SettingsCatalog {
   }
   return output;
  }
+}
+public sealed class MenuPageItem { public string Kind, Id, Label, Help; public string[] Keys; }
+public sealed class MenuPageDef { public string Id, Label, Help; public MenuPageItem[] Items; }
+public sealed class MenuCityPreset { public string Name; public string[] NpcKeys; public object[] NpcValues; public string[] WorldKeys; public object[] WorldValues; }
+public static class MenuPages {
+ public static readonly MenuPageDef[] Pages = new MenuPageDef[] {
+  new MenuPageDef { Id="talk",Label="Talk",Help="Hold the talk button near someone and speak.",Items=new MenuPageItem[]{
+   new MenuPageItem { Kind="action",Id="micTest",Label="Mic test",Help="Records about two seconds and reports the level. Nothing is sent online or saved.",Keys=new string[]{} },
+   new MenuPageItem { Kind="setting",Id="audio.micDeviceId",Label="Microphone",Help="Which microphone to use. Default follows Windows.",Keys=new string[]{"audio.micDeviceId"} },
+   new MenuPageItem { Kind="setting",Id="controls.pttKey",Label="Talk key (hold)",Help="Hold this key, speak, then let go.",Keys=new string[]{"controls.pttKey"} },
+   new MenuPageItem { Kind="setting",Id="controls.controllerPtt",Label="Talk button (hold)",Help="Controller button to hold while you speak.",Keys=new string[]{"controls.controllerPtt"} },
+   new MenuPageItem { Kind="setting",Id="conversation.language",Label="Language",Help="The language you speak and NPCs answer in.",Keys=new string[]{"conversation.language"} }
+  } },
+  new MenuPageDef { Id="voices",Label="NPC Voices",Help="How NPCs sound.",Items=new MenuPageItem[]{
+   new MenuPageItem { Kind="setting",Id="audio.enabled",Label="NPC voices",Help="NPCs answer out loud. Subtitles still work when this is off.",Keys=new string[]{"audio.enabled"} },
+   new MenuPageItem { Kind="setting",Id="audio.masterVolume",Label="Voice volume",Help="One volume for every NPC voice.",Keys=new string[]{"audio.masterVolume"} },
+   new MenuPageItem { Kind="setting",Id="general.subtitles+world.subtitles",Label="Subtitles",Help="Show what NPCs say on screen.",Keys=new string[]{"general.subtitles","world.subtitles"} }
+  } },
+  new MenuPageDef { Id="city",Label="City Life",Help="How busy the streets feel.",Items=new MenuPageItem[]{
+   new MenuPageItem { Kind="action",Id="cityPreset",Label="City mood",Help="Quiet, Normal or Busy. Sets encounter rate, aggression and chatter together.",Keys=new string[]{} },
+   new MenuPageItem { Kind="setting",Id="world.enabled",Label="Street encounters",Help="Street events and gang activity near you.",Keys=new string[]{"world.enabled"} },
+   new MenuPageItem { Kind="setting",Id="world.streetFights+world.turfWars",Label="Fights",Help="Street fights and gang turf wars.",Keys=new string[]{"world.streetFights","world.turfWars"} },
+   new MenuPageItem { Kind="setting",Id="conversation.vehicleEnabled",Label="Vehicle conversations",Help="Talk to drivers and passengers through the window.",Keys=new string[]{"conversation.vehicleEnabled"} },
+   new MenuPageItem { Kind="setting",Id="conversation.approachEnabled",Label="NPCs approach you",Help="Let NPCs start a conversation. You can ignore them.",Keys=new string[]{"conversation.approachEnabled"} }
+  } },
+  new MenuPageDef { Id="controls",Label="Controls",Help="Keys and buttons.",Items=new MenuPageItem[]{
+   new MenuPageItem { Kind="setting",Id="controls.menuKey",Label="Menu key",Help="Opens this menu.",Keys=new string[]{"controls.menuKey"} },
+   new MenuPageItem { Kind="setting",Id="controls.controllerMenu",Label="Menu button (hold with RB)",Help="Controller button held together with the modifier.",Keys=new string[]{"controls.controllerMenu"} },
+   new MenuPageItem { Kind="setting",Id="controls.panicKey",Label="Panic key",Help="Stops every mod scene, voice and AI request at once.",Keys=new string[]{"controls.panicKey"} },
+   new MenuPageItem { Kind="setting",Id="general.hints",Label="Button hints",Help="Show who you can talk to and which button to hold.",Keys=new string[]{"general.hints"} },
+   new MenuPageItem { Kind="setting",Id="controls.promptStyle",Label="Button style",Help="Xbox, PlayStation or keyboard labels. Auto follows your last input.",Keys=new string[]{"controls.promptStyle"} }
+  } },
+  new MenuPageDef { Id="status",Label="AI & Status",Help="Is everything connected?",Items=new MenuPageItem[]{
+   new MenuPageItem { Kind="info",Id="connection",Label="Connection",Help="Green when the companion and game are talking to each other.",Keys=new string[]{} },
+   new MenuPageItem { Kind="info",Id="model",Label="AI in use",Help="The AI model answering NPC conversations.",Keys=new string[]{} },
+   new MenuPageItem { Kind="info",Id="spend",Label="AI spend today",Help="Estimated spend against the daily cap.",Keys=new string[]{} },
+   new MenuPageItem { Kind="action",Id="testConnection",Label="Test connection",Help="Sends one small paid AI request within the daily cap.",Keys=new string[]{} },
+   new MenuPageItem { Kind="setting",Id="ai.enabled",Label="Online AI",Help="Off uses offline fallback lines, clearly labelled.",Keys=new string[]{"ai.enabled"} }
+  } },
+  new MenuPageDef { Id="advanced",Label="Advanced",Help="Everything else. The defaults are fine.",Items=new MenuPageItem[]{
+   new MenuPageItem { Kind="action",Id="restoreDefaults",Label="Restore defaults",Help="Puts every setting back to its default, including keys.",Keys=new string[]{} },
+   new MenuPageItem { Kind="action",Id="panic",Label="Panic: stop everything",Help="Cancels owned scenes, voices and AI. Also on the panic key.",Keys=new string[]{} },
+   new MenuPageItem { Kind="setting",Id="conversation.pushToTalk",Label="Voice talk",Help="Talk with your microphone. Audio is captured only while the button is held.",Keys=new string[]{"conversation.pushToTalk"} },
+   new MenuPageItem { Kind="setting",Id="conversation.tapToTalk",Label="Tap to talk",Help="Tap once to start listening; it stops after a short silence.",Keys=new string[]{"conversation.tapToTalk"} },
+   new MenuPageItem { Kind="setting",Id="conversation.typedFallback",Label="Typed talk (no mic)",Help="Typed text and the reply wheel for players without a microphone.",Keys=new string[]{"conversation.typedFallback"} },
+   new MenuPageItem { Kind="action",Id="allSettings",Label="All settings",Help="Every setting, searchable, plus the AI settings advisor.",Keys=new string[]{} },
+   new MenuPageItem { Kind="action",Id="profiles",Label="Profiles",Help="Save or apply a full set of settings.",Keys=new string[]{} },
+   new MenuPageItem { Kind="action",Id="diagnostics",Label="Diagnostics",Help="Self-tests, voice test, NPC inspector and a sanitized report.",Keys=new string[]{} }
+  } }
+ };
+ public static readonly string[] DormantKeys = new string[]{"audio.duckGame","audio.duckAmount","audio.followGameSessionVolume","audio.preRender","audio.windowMuffleGain","safety.pauseInInteriors","safety.maxOwnedVehicles"};
+ public static readonly MenuCityPreset[] CityPresets = new MenuCityPreset[] {
+  new MenuCityPreset { Name="Quiet",NpcKeys=new string[]{"conversation.approachChance","combat.barkDensity","ai.directorIntervalSeconds","vehicles.roadRage.weight"},NpcValues=new object[]{10d,30d,20d,20d},WorldKeys=new string[]{"ambientHostility","gangAggression","eventIntervalSeconds","maxActiveEvents"},WorldValues=new object[]{40d,50d,150d,1d} },
+  new MenuCityPreset { Name="Normal",NpcKeys=new string[]{"conversation.approachChance","combat.barkDensity","ai.directorIntervalSeconds","vehicles.roadRage.weight"},NpcValues=new object[]{25d,65d,10d,50d},WorldKeys=new string[]{"ambientHostility","gangAggression","eventIntervalSeconds","maxActiveEvents"},WorldValues=new object[]{65d,75d,75d,2d} },
+  new MenuCityPreset { Name="Busy",NpcKeys=new string[]{"conversation.approachChance","combat.barkDensity","ai.directorIntervalSeconds","vehicles.roadRage.weight"},NpcValues=new object[]{50d,85d,5d,80d},WorldKeys=new string[]{"ambientHostility","gangAggression","eventIntervalSeconds","maxActiveEvents"},WorldValues=new object[]{80d,85d,45d,3d} }
+ };
 }
 }

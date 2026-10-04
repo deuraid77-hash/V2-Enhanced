@@ -9,9 +9,9 @@ const ACTIVE = new Set(['starting', 'capturing', 'stopping', 'transcribing']);
 const UUID = /^[\da-f]{8}-[\da-f]{4}-[1-5][\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i;
 function uuid(v: unknown) { if (typeof v !== 'string' || !UUID.test(v)) throw new AiError('invalid_payload', 'A valid UUID is required.'); return v; }
 type Entry = { receipt: CaptureReceipt; fingerprint: string; sequence: number; stopRequestId?: string; result?: TranscriptionResult; conversationRequestId: string; config: string; focusAt?:number; checkingFocus?:boolean };
-export type PttOptions = { host: CaptureHost; provider: TranscriptionProvider; getSettings: SettingsGetter; budget: AiBudget; scheduler: AiScheduler; validateTarget: (target: PttTarget) => ValidatedPttTarget; now?: () => number; autoTick?: boolean };
+export type PttOptions = { host: CaptureHost; provider: TranscriptionProvider; getSettings: SettingsGetter; budget: AiBudget; scheduler: AiScheduler; validateTarget: (target: PttTarget) => ValidatedPttTarget; now?: () => number; autoTick?: boolean; micTestMs?: number };
 export class PttService {
-  private entries = new Map<string, Entry>(); private timer?: ReturnType<typeof setInterval>; private now: () => number; private closed = false; private captureAvailable = false;
+  private entries = new Map<string, Entry>(); private timer?: ReturnType<typeof setInterval>; private now: () => number; private closed = false; private captureAvailable = false; private micTesting = false;
   constructor(private options: PttOptions) { this.now = options.now ?? Date.now; if (options.autoTick !== false) { this.timer = setInterval(() => this.validateActive(), 100); this.timer.unref(); } }
   private iso(at = this.now()) { return new Date(at).toISOString(); }
   private configuration() { const s = this.options.getSettings(); return JSON.stringify(['conversation.pushToTalk','audio.micDeviceId','audio.micMaxSeconds','audio.micSensitivity','audio.micSilenceThreshold','controls.pttKey','controls.controllerPtt'].map(k => s[k])); }
@@ -83,5 +83,27 @@ export class PttService {
   async result(id:string){this.validateActive();const e=this.entry(id);await this.checkFocus(e);if(e.receipt.state!=='ready'||!e.result)throw new AiError('capture_not_ready','Transcription is not ready.',409);try{this.guard(e.receipt);}catch(error){this.cancelEntry(e,'scope_changed');throw error;}return{success:true,captureId:id,conversationRequestId:e.conversationRequestId,text:e.result.text,language:e.result.language,source:'gemini' as const,model:e.result.model};}
   private async checkFocus(e:Entry){if(!['stopping','transcribing','ready'].includes(e.receipt.state))return;try{const result=await this.options.host.focus(e.receipt.id);e.focusAt=this.now();if(!result.valid)this.cancelEntry(e,result.reasonCode||'focus_lost');}catch{this.cancelEntry(e,'capture_unavailable');}}
   validateActive(){this.prune();for(const e of this.entries.values())if(ACTIVE.has(e.receipt.state)||e.receipt.state==='ready'){try{this.guard(e.receipt);if(this.configuration()!==e.config)throw new AiError('settings_changed','Input settings changed.',409);if(e.receipt.leaseExpiresAt&&Date.parse(e.receipt.leaseExpiresAt)<=this.now())throw new AiError('lease_expired','Held input expired.',409);if(['starting','capturing'].includes(e.receipt.state)&&this.now()-Date.parse(e.receipt.startedAt||e.receipt.createdAt)>=e.receipt.maxDurationMs)throw new AiError('max_duration','Maximum capture duration reached.',409);if(['stopping','transcribing','ready'].includes(e.receipt.state)&&!e.checkingFocus&&this.now()-(e.focusAt||0)>=250){e.checkingFocus=true;void this.checkFocus(e).finally(()=>{e.checkingFocus=false;});}}catch(error){this.cancelEntry(e,error instanceof AiError?error.code:'scope_changed');}}}
+  /** Local microphone level check (~2 s). No transcription, no provider call, nothing saved; the buffer is zero-filled. */
+  async micTest() {
+    const get=this.options.getSettings;
+    if(this.closed||!settingBoolean(get,'general.enabled',true)||settingBoolean(get,'general.safeMode',false))throw new AiError('disabled','Living Los Santos is disabled.',409);
+    if(this.micTesting||[...this.entries.values()].some(e=>ACTIVE.has(e.receipt.state)))throw new AiError('capture_busy','Another capture is active.',409);
+    this.micTesting=true;const id=randomUUID(),steps=Math.max(1,Math.round((this.options.micTestMs??2000)/250));let pcm:Buffer|undefined;
+    try{
+      const threshold=settingNumber(get,'audio.micSilenceThreshold',.015);
+      const device=await this.options.host.start({id,deviceId:settingString(get,'audio.micDeviceId','default'),maxDurationMs:Math.max(2000,steps*250+1500),sensitivity:settingNumber(get,'audio.micSensitivity',1),silenceThreshold:threshold});
+      for(let sequence=1;sequence<=steps;sequence++){
+        const held=await this.options.host.lease(id,sequence);
+        if(!['starting','capturing'].includes(held.state))throw new AiError(held.reasonCode&&/^[a-z_]{1,40}$/.test(held.reasonCode)?held.reasonCode:'capture_cancelled','The microphone test was interrupted.',409);
+        await new Promise<void>(resolve=>setTimeout(resolve,(this.options.micTestMs??2000)/steps));
+        if(this.closed)throw new AiError('shutdown','The companion is closing.',409);
+      }
+      const clip=await this.options.host.stop(id);pcm=clip.pcm;
+      const level=Number.isFinite(clip.rms)?Math.max(0,Math.min(1,clip.rms)):0;
+      this.captureAvailable=true;
+      return{success:true,deviceName:device.deviceName,durationMs:Math.max(0,Math.round(clip.durationMs)),level:Math.round(level*10000)/10000,threshold,verdict:level<threshold?'silent':level<threshold*3?'quiet':'ok',transcribed:false,saved:false};
+    }catch(error){if(error instanceof AiError)throw error;this.captureAvailable=false;throw new AiError('capture_unavailable','No microphone could be opened.',503);}
+    finally{pcm?.fill(0);this.micTesting=false;void this.options.host.cancel(id).catch(()=>{});}
+  }
   async close(){this.closed=true;if(this.timer)clearInterval(this.timer);for(const e of this.entries.values())this.cancelEntry(e,'shutdown');await this.options.host.close();}
 }

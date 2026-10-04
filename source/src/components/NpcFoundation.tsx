@@ -44,7 +44,7 @@ export function NpcSettingsPanel({ companionFresh, now, resource, aiResource, wo
   </>;
 }
 
-const controllerLabels: Record<number, string> = { 51: 'D-pad right (legacy contextual 51)', 52: 'D-pad left (legacy contextual 52)', 222: 'Y / Triangle', 223: 'A / Cross', 224: 'X / Square', 225: 'B / Circle', 226: 'LB / L1', 227: 'RB / R1', 228: 'LT / L2', 229: 'RT / R2', 230: 'Left stick click / L3', 231: 'Right stick click / R3', 232: 'D-pad up', 233: 'D-pad down', 234: 'D-pad left', 235: 'D-pad right', 236: 'View / Share' };
+export const controllerLabels: Record<number, string> = { 51: 'D-pad right (legacy contextual 51)', 52: 'D-pad left (legacy contextual 52)', 222: 'Y / Triangle', 223: 'A / Cross', 224: 'X / Square', 225: 'B / Circle', 226: 'LB / L1', 227: 'RB / R1', 228: 'LT / L2', 229: 'RT / R2', 230: 'Left stick click / L3', 231: 'Right stick click / R3', 232: 'D-pad up', 233: 'D-pad down', 234: 'D-pad left', 235: 'D-pad right', 236: 'View / Share' };
 function CatalogueField({ item, value, savedValue, dirty, onChange, onExplain }: { item: SettingDefinition; value: SettingValue; savedValue: SettingValue; dirty: boolean; onChange: (value: SettingValue) => void; onExplain: () => void }) {
   const id = `setting-${item.key}`, hint = `${id}-hint`;
   const controllerOptions = item.key === 'controls.menuModifier' ? [226, 227, 228, 229] : item.key.startsWith('controls.controller') && item.type === 'number' && item.key !== 'controls.controllerDeadZone' ? [...CONTROLLER_BINDINGS] : null;

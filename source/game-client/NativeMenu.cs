@@ -48,6 +48,9 @@ namespace LivingLosSantosV2
         public bool Capturing {get{return nav.Capturing;}}
         public bool ControlsMasked {get;private set;}
         private static readonly int[] CapturedControls={222,223,224,225,226,227,228,229,230,231,232,233,234,235,236};
+        private static readonly SettingDefinition[] worldDefinitions=WorldDefinitions();
+        private bool micTesting;private string micResult;
+        private readonly List<KeyValuePair<string,string>> micDevices=new List<KeyValuePair<string,string>>();
         public NativeMenu(NpcSettingsState values,Func<Dictionary<string,object>> worldState,Func<Dictionary<string,object>> debug,Func<Dictionary<string,object>[]> npcs,Action<MenuRequest> request,Action stop,string profileFolder)
         {settings=values;world=worldState;diagnostics=debug;inspect=npcs;submit=request;panic=stop;files=new ProfileFiles(profileFolder);for(int i=0;i<text.Length;i++)text[i]=new TextElement("",PointF.Empty,.3f,Color.White,Font.ChaletLondon,Alignment.Left,false,true);}
         public void Queue(Keys key) {if(keys.Count<32)keys.Enqueue(key);}
@@ -91,7 +94,7 @@ namespace LivingLosSantosV2
         private int WorldRevision() {return Wire.Integer(world(),"revision",0,Int32.MaxValue);}
         private Dictionary<string,object> WorldValues() {return Wire.Map(Wire.Value(world(),"settings"));}
         private Dictionary<string,object> NpcValues() {return (Dictionary<string,object>)settings.Snapshot();}
-        private object Value(SettingDefinition spec,bool isWorld) {object value;var changes=isWorld?worldDraft:draft;if(changes.TryGetValue(spec.Key,out value))return value;return (isWorld?WorldValues():NpcValues())[spec.Key];}
+        private object Value(SettingDefinition spec,bool isWorld) {object value;var changes=isWorld?worldDraft:draft;if(changes.TryGetValue(spec.Key,out value))return value;return (isWorld?WorldValues():NpcValues()).TryGetValue(spec.Key,out value)?value:spec.Default;}
         private void Change(SettingDefinition spec,object value,bool isWorld)
         {
             try {
@@ -120,46 +123,123 @@ namespace LivingLosSantosV2
         }
         private void Add(string label,string value,string help,Action action=null,Action<int> adjust=null,string settingKey=null) {rows.Add(new Row{Label=label,Value=value??"",Help=help??"",Activate=action,Adjust=adjust,SettingKey=settingKey});}
         private void Enter(string page) {nav.Enter(page);Feedback(false);}
+        private Dictionary<string,object> CombinedNpc(){var v=NpcValues();foreach(var p in draft)v[p.Key]=p.Value;return v;}
+        private Dictionary<string,object> CombinedWorld(){var v=new Dictionary<string,object>(WorldValues());foreach(var p in worldDraft)v[p.Key]=p.Value;return v;}
+        private void AddSetting(MenuPageItem item)
+        {
+            var specs=item.Keys.Select(k=>MenuPageRules.Definition(k,worldDefinitions)).ToArray();
+            if(specs.Length==1){
+                var spec=specs[0];bool isWorld=MenuPageRules.IsWorld(item.Keys[0]);object value=Value(spec,isWorld);
+                if(spec.Key=="audio.micDeviceId"){string id=Convert.ToString(value,CultureInfo.InvariantCulture);string name=id=="default"?"Windows default":micDevices.Where(d=>d.Key==id).Select(d=>d.Value).FirstOrDefault()??"Saved device";
+                    Action<int> cycle=d=>{var ids=new List<string>{"default"};ids.AddRange(micDevices.Select(x=>x.Key));int i=Math.Max(0,ids.IndexOf(id));Change(spec,ids[(i+d+ids.Count)%ids.Count],false);};
+                    Add(item.Label,name,item.Help+(micDevices.Count==0?" No other microphones were reported.":""),()=>cycle(1),cycle,spec.Key);return;}
+                string shown=spec.Key.Contains("controller")?Button((int)NpcMind.Number(value)):MenuRules.Display(value);
+                Add(item.Label,shown,item.Help+" Default: "+MenuRules.Display(spec.Default)+".",()=>Edit(spec,isWorld),d=>{if(spec.Kind=="boolean"||spec.Kind=="number"||spec.Options.Length>0)Change(spec,MenuRules.Step(spec,Value(spec,isWorld),d),isWorld);},item.Keys[0]);
+                return;
+            }
+            object current=MenuPageRules.CompositeValue(specs.Select((s,i)=>Value(s,MenuPageRules.IsWorld(item.Keys[i]))).ToList());
+            Action flip=()=>{bool next=MenuPageRules.CompositeNext(current);for(int i=0;i<specs.Length;i++)Change(specs[i],next,MenuPageRules.IsWorld(item.Keys[i]));};
+            Add(item.Label,current==null?"Mixed":MenuRules.Display(current),item.Help,flip,d=>flip(),item.Keys[0]);
+        }
+        private string InfoValue(string id)
+        {
+            if(status.Count==0)return "Checking...";
+            try{
+                var caps=Wire.Map(Wire.Value(status,"capabilities"));var runtime=Wire.Map(Wire.Value(status,"runtime"));var budget=Wire.Map(Wire.Value(status,"budget"));
+                if(id=="connection")return !Wire.Boolean(caps,"configured")?"No API key":Wire.Boolean(runtime,"connected")?"Connected":"Game not linked";
+                if(id=="model")return settings.Flag("ai.enabled")?settings.Text("ai.liveModel"):"Offline lines";
+                if(id=="spend")return "$"+NpcMind.Number(Wire.Value(budget,"spentEstimateUsd")).ToString("0.00",CultureInfo.InvariantCulture)+" of $"+NpcMind.Number(Wire.Value(budget,"dailyLimitUsd")).ToString("0.00",CultureInfo.InvariantCulture);
+            }catch(InvalidOperationException){return "Unknown";}
+            return "";
+        }
+        private string ActionValue(string id)
+        {
+            switch(id){
+                case "micTest":return micTesting?"Listening...":micResult??"Run";
+                case "cityPreset":return MenuPageRules.MatchCityPreset(CombinedNpc(),CombinedWorld());
+                case "testConnection":return "Metered";
+                case "restoreDefaults":case "panic":return "Confirm";
+                case "profiles":return profiles.Count>0?profiles.Count.ToString():"›";
+                default:return "›";
+            }
+        }
+        private void RunAction(string id)
+        {
+            switch(id){
+                case "micTest":
+                    if(micTesting)return;micTesting=true;message="Speak normally for two seconds. Nothing is sent online or saved.";
+                    Request("POST","api/ptt/mic-test",new Dictionary<string,object>(),(r,e)=>{micTesting=false;if(e!=null){micResult="No mic";message="Mic test failed: "+ResponsePolicy.CleanText(e,160);return;}try{string verdict=Wire.Text(r,"verdict",16);micResult=verdict=="ok"?"Working":verdict=="quiet"?"Too quiet":"Silent";message=verdict=="ok"?"Microphone heard you.":verdict=="quiet"?"Heard you faintly. Move closer or raise the Windows mic level.":"Heard nothing. Check the microphone choice and Windows privacy settings.";}catch(InvalidOperationException){micResult="Unknown";message="Mic test returned an unreadable result.";}});
+                    return;
+                case "cityPreset":CycleCityPreset(1);return;
+                case "testConnection":StartAi("connection",new Dictionary<string,object>());return;
+                case "restoreDefaults":Confirm("Restore every setting to its default, including keys?",()=>Request("POST","api/profiles/Realistic/apply",new Dictionary<string,object>{{"expectedRevision",serverRevision},{"expectedWorldRevision",serverWorldRevision}},BundleReply));return;
+                case "panic":Confirm("Stop NPC and world work now?",()=>{PanicStop();panic();});return;
+                case "allSettings":Enter("all");return;
+                case "profiles":RefreshProfiles();Enter("profiles");return;
+                case "diagnostics":Enter("diagnostics");return;
+            }
+        }
+        private void RefreshDevices()
+        {
+            Request("GET","api/ptt/devices",null,(r,e)=>{if(e!=null)return;try{micDevices.Clear();foreach(var d in Wire.Maps(Wire.Value(r,"devices")).Take(16)){if(!Wire.Boolean(d,"available"))continue;string id=Wire.Text(d,"id",128);if(id=="default")continue;micDevices.Add(new KeyValuePair<string,string>(id,MenuRules.Clip(Wire.Text(d,"name",200),26)));}}catch(InvalidOperationException){micDevices.Clear();}});
+        }
+        private void CycleCityPreset(int direction)
+        {
+            var preset=MenuPageRules.NextCityPreset(MenuPageRules.MatchCityPreset(CombinedNpc(),CombinedWorld()),direction);
+            for(int i=0;i<preset.NpcKeys.Length;i++)Change(MenuPageRules.Definition(preset.NpcKeys[i],worldDefinitions),preset.NpcValues[i],false);
+            for(int i=0;i<preset.WorldKeys.Length;i++)Change(MenuPageRules.Definition(MenuPageRules.WorldPrefix+preset.WorldKeys[i],worldDefinitions),preset.WorldValues[i],true);
+            message="City mood: "+preset.Name+".";
+        }
         private void BuildRows()
         {
             rows.Clear();
             if(nav.Page=="home"){
+                foreach(var definition in MenuPages.Pages){var page=definition;Add(page.Label,"›",page.Help,()=>{if(page.Id=="status")RefreshStatus();if(page.Id=="talk")RefreshDevices();Enter("page:"+page.Id);});}
+                // Shown only when a save failed and the player must decide; normal edits apply silently.
+                if(draftBlocked&&draft.Count+worldDraft.Count>0)Add("Review pending edits","Action required","A save was rejected. Your edits are kept until you retry or discard them.",()=>Enter("drafts"));
+                return;
+            }
+            if(nav.Page.StartsWith("page:",StringComparison.Ordinal)){
+                var page=MenuPageRules.Page(nav.Page.Substring(5));if(page==null){Add("Page unavailable","","Go back.");return;}
+                foreach(var definition in page.Items){var item=definition;
+                    if(item.Kind=="setting")AddSetting(item);
+                    else if(item.Kind=="info")Add(item.Label,InfoValue(item.Id),item.Help);
+                    else Add(item.Label,ActionValue(item.Id),item.Help,()=>RunAction(item.Id),item.Id=="cityPreset"?(Action<int>)CycleCityPreset:null);
+                }
+                return;
+            }
+            if(nav.Page=="all"){
+                // Advanced escape hatch: every setting stays reachable. This index is the one page allowed past 8 rows.
                 Add("Search all settings",filter.Length==0?"Type to search":filter,"Search setting names and help text.",()=>TextInput("Search settings",filter,v=>{filter=v;Enter("search");}));
-                if(draft.Count+worldDraft.Count>0)Add("Review pending edits",draftBlocked?"Action required":"Pending", "Review retained changes. A failed request never discards your edits.",()=>Enter("drafts"));
-                foreach(string group in SettingsCatalog.All.Select(s=>s.Group).Distinct()){string g=group;Add(g,"Settings", "Open "+g+" settings.",()=>Enter("group:"+g));}
-                Add("World director","14 live settings","Original world settings have their own revision.",()=>Enter("world"));
-                Add("Profiles and presets",profiles.Count.ToString(),"Apply, save, rename, delete, export or import a full profile.",()=>{RefreshProfiles();Enter("profiles");});
                 Add("AI Settings Advisor","Preview first","Describe the change you want. Nothing applies until you accept the proposal.",()=>TextInput("What would you like to change?","",v=>StartAi("advisor",new Dictionary<string,object>{{"intent",v}})));
-                Add("NPC inspector",inspect().Length+" observed","Real observed NPC mind, physical state and working transcript.",()=>Enter("inspect"));
-                Add("AI usage and connection","Refresh on open","Queue, budget, recent jobs and provider availability, with observation time.",()=>{RefreshStatus();Enter("status");});
-                Add("Diagnostics and self-test","Local evidence","Version guard, measured Tick costs and menu/input diagnostics.",()=>Enter("diagnostics"));
-                Add("Panic stop","Cancel owned work","Cancels owned AI and scenarios. Menu remains available.",()=>Confirm("Stop NPC and world work now?",()=>{PanicStop();panic();}));
-                Add("Close menu","Back / Escape","Release every menu control mask.",Close);return;
+                foreach(string group in SettingsCatalog.All.Select(s=>s.Group).Distinct()){string g=group;Add(g,"Settings","Open "+g+" settings.",()=>Enter("group:"+g));}
+                Add("World director (original)",worldDefinitions.Length+" settings","Original world settings have their own revision.",()=>Enter("world"));
+                return;
             }
             if(nav.Page.StartsWith("group:",StringComparison.Ordinal)||nav.Page=="search"||nav.Page=="world") {
-                var specs=nav.Page=="world"?WorldDefinitions():nav.Page=="search"?SettingsCatalog.All.Concat(WorldDefinitions()).Where(s=>(s.Label+" "+s.Key+" "+s.Tooltip).IndexOf(filter,StringComparison.OrdinalIgnoreCase)>=0).ToArray():SettingsCatalog.All.Where(s=>s.Group==nav.Page.Substring(6)).ToArray();
+                var specs=nav.Page=="world"?worldDefinitions:nav.Page=="search"?SettingsCatalog.All.Concat(worldDefinitions).Where(s=>(s.Label+" "+s.Key+" "+s.Tooltip).IndexOf(filter,StringComparison.OrdinalIgnoreCase)>=0).ToArray():SettingsCatalog.All.Where(s=>s.Group==nav.Page.Substring(6)).ToArray();
                 if(nav.Page=="search"){Add("Change search",filter,"Search every setting's label and help text.",()=>TextInput("Search settings",filter,v=>{filter=v;nav.Selected=nav.Scroll=0;}));Add("Clear search","Show all", "Clear the query without requiring an empty keyboard submission.",()=>{filter="";nav.Selected=nav.Scroll=0;});}
-                foreach(var definition in specs){var spec=definition;bool isWorld=spec.Group=="World director";object value=Value(spec,isWorld);string label=spec.Key.Contains("controller")||spec.Key.EndsWith("menuModifier",StringComparison.Ordinal)?InputLabels.Button((int)NpcMind.Number(value),settings.Text("controls.promptStyle")=="playstation"):MenuRules.Display(value);
+                foreach(var definition in specs){var spec=definition;bool isWorld=Array.IndexOf(worldDefinitions,spec)>=0;object value=Value(spec,isWorld);string label=spec.Key.Contains("controller")||spec.Key.EndsWith("menuModifier",StringComparison.Ordinal)?InputLabels.Button((int)NpcMind.Number(value),settings.Text("controls.promptStyle")=="playstation"):MenuRules.Display(value);
                     Add(spec.Label,label,spec.Tooltip+" Default: "+MenuRules.Display(spec.Default)+(spec.Kind=="number"?" Range "+spec.Min+"–"+spec.Max:""),()=>Edit(spec,isWorld),d=>{if(spec.Kind=="boolean"||spec.Kind=="number"||spec.Options.Length>0)Change(spec,MenuRules.Step(spec,Value(spec,isWorld),d),isWorld);},isWorld?"world."+spec.Key:spec.Key);}
                 if(specs.Length==0)Add("No matching settings","","Use a shorter search phrase.");return;
             }
             if(nav.Page=="drafts") {foreach(var p in draft)Add(p.Key,MenuRules.Display(p.Value),"Retained NPC setting edit.");foreach(var p in worldDraft)Add("world."+p.Key,MenuRules.Display(p.Value),"Retained world setting edit.");Add("Refresh and rebase edits","Explicit retry","Refreshes both revisions and validates this draft against current server values before applying.",RebaseDraft);Add("Discard pending edits","Keep server values","Drops only unsent draft changes.",()=>{if(requestPending){message="Wait for the submitted request before discarding.";return;}draft.Clear();worldDraft.Clear();draftBase.Clear();worldDraftBase.Clear();draftBlocked=false;nav.Back();});return;}
             if(nav.Page=="profiles"){
                 Add("Save current as...","Custom profile","Saves the current NPC and world settings, including controller bindings.",()=>TextInput("New custom profile name","",v=>Request("POST","api/profiles",new Dictionary<string,object>{{"name",v}},ProfileReply)));
-                Add("Import local profile","Profiles folder","Select a bounded JSON file from the fixed LocalAppData Profiles folder.",()=>Local(()=>new Dictionary<string,object>{{"files",files.List()}},(r,e)=>{if(e!=null){message=e;return;}paragraphs.Clear();paragraphs.AddRange(((System.Collections.IEnumerable)r["files"]).Cast<object>().Select(Convert.ToString));Enter("imports");}));
-                foreach(var p in profiles){string name=Wire.Text(p,"name",40);Add(name,Wire.Boolean(p,"builtin")?"Preset":"Custom","Open this profile's actions.",()=>Enter("profile:"+name));}return;
+                foreach(var p in profiles){string name=Wire.Text(p,"name",40),route="api/profiles/"+Uri.EscapeDataString(name);Add(name,Wire.Boolean(p,"builtin")?"Preset":"Custom","Apply this profile. Rename, delete, export and import are in the companion portal.",()=>Confirm("Apply profile "+name+"?",()=>Request("POST",route+"/apply",new Dictionary<string,object>{{"expectedRevision",serverRevision},{"expectedWorldRevision",serverWorldRevision}},BundleReply)));}return;
             }
-            if(nav.Page.StartsWith("profile:",StringComparison.Ordinal)){
-                string name=nav.Page.Substring(8),route="api/profiles/"+Uri.EscapeDataString(name);bool builtin=profiles.Any(p=>(string)p["name"]==name&&Wire.Boolean(p,"builtin"));
-                Add("Apply "+name,"Both revisions","Applies NPC and world settings together. A stale revision rejects the complete operation.",()=>Confirm("Apply profile "+name+"?",()=>Request("POST",route+"/apply",new Dictionary<string,object>{{"expectedRevision",serverRevision},{"expectedWorldRevision",serverWorldRevision}},BundleReply)));
-                Add("Export JSON","Local profile folder","Writes only this profile's settings. No keys, transcript or game save is exported.",()=>Request("GET",route+"/export",null,(r,e)=>{if(e!=null){message=e;return;}var profile=Wire.Map(Wire.Value(r,"profile"));Local(()=>new Dictionary<string,object>{{"path",files.Write(name,profile)}},(data,error)=>message=error??"Export saved in LocalAppData / LivingLosSantos / Enhanced / Profiles.");}));
-                if(!builtin){Add("Rename profile","","Choose a unique custom profile name.",()=>TextInput("Rename profile",name,v=>Request("PATCH",route,new Dictionary<string,object>{{"name",v}},(r,e)=>{ProfileReply(r,e);if(e==null){nav.Back();}})));Add("Delete profile","Confirm","Deletes the stored custom profile; current settings remain active.",()=>Confirm("Delete custom profile "+name+"?",()=>Request("DELETE",route,null,(r,e)=>{ProfileReply(r,e);if(e==null)nav.Back();})));}return;
-            }
-            if(nav.Page=="imports") {foreach(string filename in paragraphs.ToArray()){string n=filename;Add(n,"Import","Validates the complete profile before saving it; importing does not apply it.",()=>Local(()=>new Dictionary<string,object>{{"profile",files.Read(n)}},(r,e)=>{if(e!=null){message=e;return;}Request("POST","api/profiles/import",r,ProfileReply);}));}if(rows.Count==0)Add("No JSON profiles found","","Place an exported profile in LocalAppData / LivingLosSantos / Enhanced / Profiles.");return;}
             if(nav.Page=="inspect"){foreach(var npc in inspect()){string id=Wire.Text(npc,"id",128);Add(Wire.Text(npc,"name",80),MenuRules.Display(npc["health"])+" health","Inspect current observations. Names are observed labels until AI persona hydration is enabled.",()=>Enter("npc:"+id));}if(rows.Count==0)Add("No observed NPCs","","Return to a visible outdoor Story Mode scene.");return;}
             if(nav.Page.StartsWith("npc:",StringComparison.Ordinal)){var n=inspect().FirstOrDefault(x=>(string)x["id"]==nav.Page.Substring(4));if(n==null){Add("NPC no longer observed","","No stale handle is used.");return;}foreach(string key in new[]{"name","faction","health","weapon","distance","recentDamage","inCombat","owned","observationAgeSeconds"}){object v;if(n.TryGetValue(key,out v))Add(key,MenuRules.Display(v),"Observed NPC "+key+".");}var mind=Wire.Map(Wire.Value(n,"mind"));foreach(var p in mind)Add("Mind / "+p.Key,MenuRules.Display(p.Value),"Current bounded NPC mental state.");Add("Working transcript","Open","Actual session conversation. Persistent notable memory is a later stage.",()=>{paragraphs.Clear();object raw;if(n.TryGetValue("history",out raw))foreach(var h in Wire.Maps(raw))paragraphs.Add(Wire.Text(h,"role",8)+": "+ResponsePolicy.CleanText(h["text"],800));Enter("transcript");});Add("Memory note",ResponsePolicy.CleanText(n.ContainsKey("memory")?n["memory"]:"",80),ResponsePolicy.CleanText(n.ContainsKey("memory")?n["memory"]:"No note recorded.",400));return;}
-            if(nav.Page=="status") {Add("Refresh status",statusAt==DateTime.MinValue?"Not observed":Math.Floor((DateTime.UtcNow-statusAt).TotalSeconds)+" seconds ago","Snapshot observed at "+(statusAt==DateTime.MinValue?"never":statusAt.ToString("u"))+". Select to refresh; no provider request.",RefreshStatus);foreach(var spec in SettingsCatalog.All.Where(s=>s.Key.StartsWith("ai.",StringComparison.Ordinal)&&s.Key.EndsWith("Model",StringComparison.Ordinal)))Add(spec.Label,settings.Text(spec.Key),"Configured model; availability is shown in the refreshed account status.");Add("Test AI connection","Metered request","Sends a small explicit provider check within the shared budget.",()=>StartAi("connection",new Dictionary<string,object>()));FlattenStatus(status,"",0);return;}
-            if(nav.Page=="diagnostics") {Add("Export sanitized diagnostics","Save report","Saves observed versions, settings and bounded error codes without credentials or transcripts.",()=>Request("POST","api/diagnostics/export",new Dictionary<string,object>(),(r,e)=>message=e??("Exported "+Wire.Text(r,"filename",160)+" ("+Wire.Integer(r,"bytes",0,1048576)+" bytes)")));foreach(var p in diagnostics())Add(p.Key,MenuRules.Display(p.Value),"Actual local diagnostic value: "+MenuRules.Display(p.Value));Add("Explain a diagnostic","AI analysis","Reads safe diagnostic summaries without keys or private transcripts.",()=>StartAi("diagnose",new Dictionary<string,object>()));Add("Menu self-test","Run","Checks layout bounds, settings metadata, state release, sound and optional vibration.",SelfTest);Add("Input conflict guide","Open","Reserved console, stock game controls and scoped masks.",()=>{paragraphs.Clear();paragraphs.AddRange(new[]{"F4 remains SHVDN console; F8 remains director toggle.","F6/F7 overlap stock character shortcuts: consumed only by valid mod actions.","Controller menu: hold RB + View. Panic: hold RB + R3.","D-pad Right starts talk. Reply wheel is scheduled for the next conversation stage.","L3 push-to-talk is opt-in and only captured during a conversation.","Combat, aiming, weapon wheel, phone, cutscene and pause guards prevent unsafe activation.","Only the menu's used controls are disabled for its current frame. Closing, pause, abort and errors release them.","Other mods may bind these controls. Rebind in Controls and verify on your physical controller."});Enter("help");});return;}
+            if(nav.Page=="diagnostics") {
+                Add("Export sanitized report","Save report","Saves observed versions, settings and bounded error codes without credentials or transcripts.",()=>Request("POST","api/diagnostics/export",new Dictionary<string,object>(),(r,e)=>message=e??("Exported "+Wire.Text(r,"filename",160)+" ("+Wire.Integer(r,"bytes",0,1048576)+" bytes)")));
+                Add("Menu self-test","Run","Checks layout bounds, settings metadata, state release, sound and optional vibration.",SelfTest);
+                Add("NPC inspector",inspect().Length+" observed","Real observed NPC mind, physical state and working transcript.",()=>Enter("inspect"));
+                Add("Live diagnostic values","Open","Version guard, measured Tick costs and input state.",()=>Enter("diagvalues"));
+                Add("Explain diagnostics with AI","Metered","Reads safe diagnostic summaries without keys or private transcripts.",()=>StartAi("diagnose",new Dictionary<string,object>()));
+                Add("Input conflict guide","Open","Reserved console, stock game controls and scoped masks.",()=>{paragraphs.Clear();paragraphs.AddRange(new[]{"F4 remains SHVDN console; F8 remains director toggle.","F6/F7 overlap stock character shortcuts: consumed only by valid mod actions.","Controller menu: hold RB + View. Panic: hold RB + R3.","D-pad Right starts talk. Reply wheel is scheduled for the next conversation stage.","L3 push-to-talk is opt-in and only captured during a conversation.","Combat, aiming, weapon wheel, phone, cutscene and pause guards prevent unsafe activation.","Only the menu's used controls are disabled for its current frame. Closing, pause, abort and errors release them.","Other mods may bind these controls. Rebind in Controls and verify on your physical controller."});Enter("help");});
+                return;
+            }
+            if(nav.Page=="diagvalues"){foreach(var p in diagnostics())Add(p.Key,MenuRules.Display(p.Value),"Actual local diagnostic value: "+MenuRules.Display(p.Value));if(rows.Count==0)Add("No diagnostic values","","Nothing observed yet.");return;}
             if(nav.Page=="proposal") {if(proposal==null){Add("No active proposal","","Ask the Settings Advisor from the home page.");return;}Add("Advisor summary","",Wire.Text(proposal,"summary",1200));foreach(var change in Wire.Maps(Wire.Value(proposal,"changes")))Add(Wire.Text(change,"label",100),MenuRules.Display(change["before"])+" → "+MenuRules.Display(change["after"]),Wire.Text(change,"reason",600));Add("Accept proposal","Explicit apply","Applies exactly the previewed NPC and world changes, only while both revisions are current.",AcceptProposal);Add("Reject proposal","Keep current settings","Discards this proposal.",RejectProposal);return;}
             if(nav.Page=="confirm"){Add("Confirm","",confirmText);Add("Cancel","","Keep the current state.");return;}
             if(nav.Page=="transcript"||nav.Page=="help"||nav.Page=="answer"){foreach(string line in paragraphs)Add(MenuRules.Clip(line,58),"",line);if(rows.Count==0)Add("Nothing recorded","","No synthetic history is shown.");return;}
@@ -216,14 +296,15 @@ namespace LivingLosSantosV2
             Color accent=settings.Text("controls.accent")=="amber"?Color.FromArgb(255,230,181,69):settings.Text("controls.accent")=="white"?Color.White:Color.FromArgb(255,84,222,220);
             Box(panel,layout.X,layout.Y,layout.Width,layout.Height,Color.FromArgb(alpha,14,20,27));Box(stripe,layout.X,layout.Y,5*s,layout.Height,accent);
             int index=0;Text(ref index,"LIVING LOS SANTOS",layout.X+18*s,layout.Y+12*s,.46f*s,Color.White);
-            Text(ref index,MenuRules.Clip(nav.Breadcrumb,75),layout.X+18*s,layout.Y+46*s,.27f*s,accent);
+            Text(ref index,MenuRules.Clip(nav.Page.StartsWith("page:",StringComparison.Ordinal)&&MenuPageRules.Page(nav.Page.Substring(5))!=null?"Living Los Santos / "+MenuPageRules.Page(nav.Page.Substring(5)).Label:nav.Breadcrumb,75),layout.X+18*s,layout.Y+46*s,.27f*s,accent);
             if(virtualKeyboard!=null){virtualKeyboard.Fit(layout.VisibleRows);float cell=(layout.Width-36*s)/10;for(int k=virtualKeyboard.FirstRow*10;k<Math.Min(virtualKeyboard.Count,(virtualKeyboard.FirstRow+layout.VisibleRows)*10);k++){float x=layout.X+18*s+(k%10)*cell,y=layout.Y+layout.HeaderHeight+(k/10-virtualKeyboard.FirstRow)*layout.RowHeight;if(k==virtualKeyboard.Selected)Box(highlight,x,y,cell-2*s,layout.RowHeight,Color.FromArgb(230,44,65,80));var item=text[k%text.Length];item.Caption=virtualKeyboard.Label(k);item.Position=new PointF(x+3*s,y+5*s);item.Scale=.24f*s;item.Color=k==virtualKeyboard.Selected?accent:Color.White;item.Alignment=Alignment.Left;item.WrapWidth=0;item.ScaledDraw();}index=0;float foot=layout.Y+layout.HeaderHeight+layout.VisibleRows*layout.RowHeight+8*s;Text(ref index,MenuRules.Clip(virtualPurpose+" ("+virtualKeyboard.Value.Length+"/"+virtualKeyboard.Limit+"): "+(virtualKeyboard.Value.Length>180?"…"+virtualKeyboard.Value.Substring(virtualKeyboard.Value.Length-180):virtualKeyboard.Value),235),layout.X+18*s,foot,.26f*s,Color.White,false,layout.Width-36*s);Text(ref index,"D-pad Move • "+Button(223)+" Type • "+Button(225)+" Cancel • select Done to submit",layout.X+18*s,layout.Y+layout.Height-25*s,.23f*s,accent);return;}
             for(int i=0;i<layout.VisibleRows&&nav.Scroll+i<rows.Count;i++){int row=nav.Scroll+i;float y=layout.Y+layout.HeaderHeight+i*layout.RowHeight;bool selected=row==nav.Selected;if(selected)Box(highlight,layout.X+8*s,y,layout.Width-16*s,layout.RowHeight,Color.FromArgb(220,44,65,80));Text(ref index,MenuRules.Clip(rows[row].Label,44),layout.X+18*s,y+4*s,.29f*s,selected?Color.White:Color.FromArgb(230,215,221,227));Text(ref index,MenuRules.Clip(rows[row].Value,26),layout.X+layout.Width-18*s,y+4*s,.27f*s,accent,true);}
             float footer=layout.Y+layout.HeaderHeight+layout.VisibleRows*layout.RowHeight+8*s;
             string tooltip=nav.Capturing?message:rows.Count>0?rows[nav.Selected].Help:"";
             Text(ref index,MenuRules.Clip(tooltip,235),layout.X+18*s,footer,.25f*s,Color.FromArgb(245,199,210,217),false,layout.Width-36*s);
-            string sync=draftBlocked?"Draft needs review":draft.Count+worldDraft.Count>0?"Draft pending":requestPending?"Saving...":settings.Revision<serverRevision||WorldRevision()<serverWorldRevision?"Saved; pending game application":"Applied NPC r"+Math.Max(0,settings.Revision)+" / world r"+WorldRevision();
-            Text(ref index,MenuRules.Clip(sync+" • "+message,115),layout.X+18*s,footer+57*s,.22f*s,accent,false,layout.Width-36*s);
+            string sync=draftBlocked?"Draft needs review":draft.Count+worldDraft.Count>0||requestPending?"Saving...":settings.Revision<serverRevision||WorldRevision()<serverWorldRevision?"Saved, applying in game...":"";
+            string footerLine=sync.Length>0&&message.Length>0?sync+" • "+message:sync+message;
+            if(footerLine.Length>0)Text(ref index,MenuRules.Clip(footerLine,115),layout.X+18*s,footer+57*s,.22f*s,accent,false,layout.Width-36*s);
             Text(ref index,Game.LastInputMethod==InputMethod.GamePad?"D-pad / stick Move • "+Button(223)+" Select • "+Button(225)+" Back • "+Button(224)+" Explain":"↑ ↓ Move • ← → Change • Enter Select • Esc Back • F1 Explain",layout.X+18*s,layout.Y+layout.Height-22*s,.22f*s,Color.White);
         }
         private static void Box(ContainerElement box,float x,float y,float width,float height,Color color){box.Position=new PointF(x,y);box.Size=new SizeF(width,height);box.Color=color;box.ScaledDraw();}
@@ -232,7 +313,6 @@ namespace LivingLosSantosV2
         private void ProfileReply(Dictionary<string,object> response,string error){if(error!=null){message=error;return;}profiles.Clear();profiles.AddRange(Wire.Maps(Wire.Value(response,"profiles")).Take(40));message="Profile saved. Current game settings are unchanged until Apply.";}
         private void BundleReply(Dictionary<string,object> response,string error){if(error!=null){message=error.Contains("409")?"Profile rejected because settings changed elsewhere. Refresh and retry.":error;Refresh();return;}serverRevision=Wire.Integer(response,"revision",0,Int32.MaxValue);serverWorldRevision=Wire.Integer(Wire.Map(Wire.Value(response,"world")),"revision",0,Int32.MaxValue);if(draft.Count+worldDraft.Count>0)draftBlocked=true;message=draftBlocked?"Profile applied; pending edits need explicit review and rebase.":"Profile saved; waiting for both game revisions.";}
         private void RefreshStatus(){Request("GET","api/ai/status",null,(r,e)=>{if(e!=null){message=e;return;}status=r;statusAt=DateTime.UtcNow;message="Companion status refreshed.";});}
-        private void FlattenStatus(Dictionary<string,object> data,string prefix,int depth){foreach(var p in data){if(rows.Count>=100)return;var map=p.Value as Dictionary<string,object>;if(map!=null&&depth<3){FlattenStatus(map,prefix+p.Key+" / ",depth+1);continue;}if(p.Value is string||p.Value is bool||p.Value is int||p.Value is double||p.Value is decimal||p.Value is long)Add(MenuRules.Clip(prefix+p.Key,55),MenuRules.Display(p.Value),prefix+p.Key+": "+MenuRules.Display(p.Value));else if(p.Value is System.Collections.IEnumerable&&depth<3){int i=0;foreach(object entry in (System.Collections.IEnumerable)p.Value){if(i++>=16||rows.Count>=100)break;var item=entry as Dictionary<string,object>;if(item!=null)FlattenStatus(item,prefix+p.Key+"["+i+"] / ",depth+1);else Add(prefix+p.Key+"["+i+"]",MenuRules.Display(entry),"Companion status array entry observed at "+statusAt.ToString("u"));}}}}
         private string Button(int id){return InputLabels.Button(id,settings.Text("controls.promptStyle")=="playstation");}
         private void StartAi(string kind,Dictionary<string,object> context)
         {

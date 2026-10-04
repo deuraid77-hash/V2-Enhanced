@@ -51,7 +51,7 @@ namespace LivingLosSantosV2
         {
             if(route==null||route.Length>512)return false;
             if(method=="GET"&&(route=="api/ptt/devices"||route=="api/ptt/status"||route=="api/memory/reputation"))return true;
-            if(method=="POST"&&(route=="api/ptt/captures"||route=="api/memory/reset"))return true;
+            if(method=="POST"&&(route=="api/ptt/captures"||route=="api/ptt/mic-test"||route=="api/memory/reset"))return true;
             Guid scopedId;Match capture=Regex.Match(route,@"^api/ptt/captures/([a-fA-F0-9-]{36})(?:/(lease|stop|result))?$");
             if(capture.Success&&Guid.TryParse(capture.Groups[1].Value,out scopedId))return capture.Groups[2].Value=="result"?method=="GET":capture.Groups[2].Value=="lease"||capture.Groups[2].Value=="stop"?method=="POST":method=="GET"||method=="DELETE";
             Match memory=Regex.Match(route,@"^api/memory/npcs/([a-fA-F0-9-]{36})$");if(memory.Success&&Guid.TryParse(memory.Groups[1].Value,out scopedId))return method=="GET";
@@ -71,7 +71,7 @@ namespace LivingLosSantosV2
             using (var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(token))
             using (var request = new HttpRequestMessage(method, new Uri(address, route)))
             {
-                requestCancellation.CancelAfter(route == "api/dialogue" ? timeout : TimeSpan.FromSeconds(3));
+                requestCancellation.CancelAfter(route == "api/dialogue" ? timeout : route == "api/ptt/mic-test" ? TimeSpan.FromSeconds(8) : TimeSpan.FromSeconds(3));
                 token = requestCancellation.Token;
                 if(json!=null) request.Content = new StringContent(json, Encoding.UTF8, "application/json");
                 using (var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false))

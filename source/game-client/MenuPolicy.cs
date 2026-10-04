@@ -134,4 +134,34 @@ namespace LivingLosSantosV2
         public Func<Dictionary<string,object>> LocalWork {get;set;}
         public Action<Dictionary<string,object>,string> Done {get;set;}
     }
+    // Simplified player menu (generated MenuPages). Keys prefixed "world." are original director settings.
+    public static class MenuPageRules
+    {
+        public const string WorldPrefix="world.";
+        public static bool IsWorld(string key){return key!=null&&key.StartsWith(WorldPrefix,StringComparison.Ordinal);}
+        public static string StoreKey(string key){return IsWorld(key)?key.Substring(WorldPrefix.Length):key;}
+        public static SettingDefinition Definition(string key,SettingDefinition[] world)
+        {
+            string k=StoreKey(key);foreach(var s in IsWorld(key)?world:SettingsCatalog.All)if(s.Key==k)return s;
+            throw new InvalidOperationException("Unknown menu setting "+key+".");
+        }
+        public static MenuPageDef Page(string id){foreach(var p in MenuPages.Pages)if(p.Id==id)return p;return null;}
+        public static string MatchCityPreset(Dictionary<string,object> npc,Dictionary<string,object> world)
+        {foreach(var p in MenuPages.CityPresets)if(Matches(p.NpcKeys,p.NpcValues,npc)&&Matches(p.WorldKeys,p.WorldValues,world))return p.Name;return "Custom";}
+        private static bool Matches(string[] keys,object[] values,Dictionary<string,object> current)
+        {
+            for(int i=0;i<keys.Length;i++){object v;if(current==null||!current.TryGetValue(keys[i],out v)||!(v is int||v is long||v is double||v is decimal))return false;
+                if(Math.Abs(Convert.ToDouble(v,CultureInfo.InvariantCulture)-Convert.ToDouble(values[i],CultureInfo.InvariantCulture))>1e-9)return false;}
+            return true;
+        }
+        public static MenuCityPreset NextCityPreset(string current,int direction)
+        {
+            var list=MenuPages.CityPresets;int n=list.Length,i=-1;for(int k=0;k<n;k++)if(list[k].Name==current)i=k;
+            if(i<0){int normal=Array.FindIndex(list,p=>p.Name=="Normal");return list[normal<0?0:normal];}
+            return list[((i+(direction<0?-1:1))%n+n)%n];
+        }
+        /// <summary>Shared value of a composite row, or null when its keys disagree ("Mixed").</summary>
+        public static object CompositeValue(IList<object> values){if(values==null||values.Count==0)return null;for(int i=1;i<values.Count;i++)if(!Equals(values[i],values[0]))return null;return values[0];}
+        public static bool CompositeNext(object composite){return composite is bool?!(bool)composite:true;}
+    }
 }

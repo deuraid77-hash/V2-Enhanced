@@ -41,3 +41,16 @@ test('early release cancels pending device start and delayed acknowledgment cann
 test('settings changed after ready invalidate private result without another request',async()=>{const f=setup(),r=f.service.start(f.input());await tick();f.service.stop(r.id,{requestId:randomUUID()});await tick();assert.equal(f.service.get(r.id).state,'ready');f.settings['audio.micDeviceId']='different-device';await assert.rejects(f.service.result(r.id),/not ready/);assert.equal(f.service.get(r.id).reasonCode,'settings_changed');assert.equal(f.counts().calls,1);await f.service.close();});
 test('SDK missing output_text is rejected without dropping measured provider usage',async()=>{const client={interactions:{create:async()=>({status:'completed',steps:[],usage:{total_input_tokens:48,total_output_tokens:7,total_tokens:55}})}};const provider=new GeminiTranscriptionProvider(()=>client as any,()=>true);await assert.rejects(provider.transcribe({pcm:Buffer.alloc(32000),durationMs:1000,language:'English',signal:new AbortController().signal}),(error:any)=>error.code==='invalid_transcription'&&error.usage.totalTokens===55);});
 test('focus loss after release cancels STT and never exposes ready text',async()=>{const f=setup();let release!:()=>void;f.delayProvider(new Promise<void>(r=>release=r));const r=f.service.start(f.input());await tick();f.service.stop(r.id,{requestId:randomUUID()});await tick();f.hostFailure('focus_lost');f.service.validateActive();await tick();assert.equal(f.service.get(r.id).reasonCode,'focus_lost');release();await tick();await assert.rejects(f.service.result(r.id),/not ready/);assert.equal(f.service.get(r.id).state,'cancelled');await f.service.close();});
+test('mic test is local: level and verdict only, no provider call, buffer zero-filled, busy and disabled guarded',async()=>{
+  const f=setup();let stopped:Buffer|undefined;const host={...f.host,stop:async()=>{stopped=Buffer.alloc(32000,7);return{pcm:stopped,durationMs:1000,rms:.2};}};
+  const service=new PttService({host,provider:f.provider,budget:f.budget,scheduler:f.scheduler,getSettings:()=>f.settings,autoTick:false,micTestMs:50,validateTarget:()=>({scope:{runtimeId:'r',sceneEpoch:'s',npcIds:[]}})});
+  f.settings['conversation.pushToTalk']=false;f.settings['ai.enabled']=false;
+  const r=await service.micTest();assert.equal(r.verdict,'ok');assert.equal(r.transcribed,false);assert.equal(r.saved,false);assert.equal(r.level,.2);
+  assert.ok(stopped&&stopped.every(b=>b===0),'captured buffer must be zero-filled');assert.equal(f.counts().calls,0);assert.equal(f.budget.snapshot().requests,0);
+  const quiet=new PttService({host:{...f.host,stop:async()=>({pcm:Buffer.alloc(32000),durationMs:1000,rms:0})},provider:f.provider,budget:f.budget,scheduler:f.scheduler,getSettings:()=>f.settings,autoTick:false,micTestMs:50,validateTarget:()=>({scope:{runtimeId:'r',sceneEpoch:'s',npcIds:[]}})});
+  assert.equal((await quiet.micTest()).verdict,'silent');
+  const first=service.micTest();await assert.rejects(service.micTest(),/active/);await first;
+  f.hostFailure('device_lost');await assert.rejects(service.micTest(),(e:AiError)=>e.code==='device_lost');f.hostFailure('');
+  f.settings['general.enabled']=false;await assert.rejects(service.micTest(),/disabled/);
+  await service.close();await quiet.close();await f.service.close();
+});

@@ -1,0 +1,14 @@
+.simple-settings { display: grid; gap: 18px; }
+.simple-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 18px; align-items: start; }
+.simple-card { display: grid; gap: 4px; }
+.simple-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 14px; padding: 10px 0; border-top: 1px solid rgba(255, 255, 255, 0.06); cursor: default; }
+.simple-row:first-of-type { border-top: 0; }
+.simple-row strong { display: block; font-size: 0.95rem; }
+.simple-row p { margin: 2px 0 0; font-size: 0.8rem; opacity: 0.7; line-height: 1.35; }
+.simple-row select, .simple-row input[type="text"] { min-width: 150px; max-width: 220px; }
+.simple-row input[type="checkbox"] { width: 20px; height: 20px; accent-color: hsl(178, 68%, 60%); }
+.simple-row output { font-variant-numeric: tabular-nums; opacity: 0.9; }
+.simple-range { display: inline-flex; align-items: center; gap: 10px; }
+.simple-range input { width: 140px; accent-color: hsl(178, 68%, 60%); }
+.simple-footer { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; }
+.nav-advanced-toggle { margin-top: 10px; opacity: 0.75; font-size: 0.8rem; }

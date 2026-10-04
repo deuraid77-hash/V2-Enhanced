@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SETTINGS_CATALOG, CONTROLLER_BINDINGS } from '../shared/settings.ts';
+import { MENU_PAGES, DORMANT_SETTING_KEYS, CITY_PRESETS, CITY_PRESET_NAMES } from '../shared/menu-layout.ts';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const q=(s:string)=>JSON.stringify(s).replace(/\\u2028/g,' ');
 const lit=(v:unknown)=>typeof v==='string'?q(v):typeof v==='number'?`${v}d`:String(v);
@@ -60,6 +61,18 @@ ${SETTINGS_CATALOG.map(s=>`  new SettingDefinition { Key=${q(s.key)},Label=${q(s
   }
   return output;
  }
+}
+public sealed class MenuPageItem { public string Kind, Id, Label, Help; public string[] Keys; }
+public sealed class MenuPageDef { public string Id, Label, Help; public MenuPageItem[] Items; }
+public sealed class MenuCityPreset { public string Name; public string[] NpcKeys; public object[] NpcValues; public string[] WorldKeys; public object[] WorldValues; }
+public static class MenuPages {
+ public static readonly MenuPageDef[] Pages = new MenuPageDef[] {
+${MENU_PAGES.map(p=>`  new MenuPageDef { Id=${q(p.id)},Label=${q(p.label)},Help=${q(p.help)},Items=new MenuPageItem[]{\n${p.items.map(it=>`   new MenuPageItem { Kind=${q(it.kind)},Id=${q(it.kind==='setting'?it.keys.join('+'):it.id)},Label=${q(it.label)},Help=${q(it.help)},Keys=new string[]{${(it.kind==='setting'?it.keys:[]).map(q).join(',')}} }`).join(',\n')}\n  } }`).join(',\n')}
+ };
+ public static readonly string[] DormantKeys = new string[]{${DORMANT_SETTING_KEYS.map(q).join(',')}};
+ public static readonly MenuCityPreset[] CityPresets = new MenuCityPreset[] {
+${CITY_PRESET_NAMES.map(n=>{const p=CITY_PRESETS[n];return `  new MenuCityPreset { Name=${q(n)},NpcKeys=new string[]{${Object.keys(p.npc).map(q).join(',')}},NpcValues=new object[]{${Object.values(p.npc).map(lit).join(',')}},WorldKeys=new string[]{${Object.keys(p.world).map(q).join(',')}},WorldValues=new object[]{${Object.values(p.world).map(lit).join(',')}} }`;}).join(',\n')}
+ };
 }
 }
 `;

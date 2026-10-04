@@ -30,5 +30,24 @@ internal static class MenuPolicyTests
         check("menu transport permits compact revision endpoint and diagnostic export",delegate{Assert(DashboardTransport.MenuRouteAllowed("PATCH","api/world/config?compact=true"));Assert(DashboardTransport.MenuRouteAllowed("POST","api/diagnostics/export"));Assert(!DashboardTransport.MenuRouteAllowed("PATCH","api/world/config?arbitrary=true"));Assert(!DashboardTransport.MenuRouteAllowed("GET","http://example.com"));Assert(!DashboardTransport.MenuRouteAllowed("DELETE","api/profiles/%2e%2e%2fsecret"));});
         check("profile files reject traversal device names and oversized payload",delegate{string folder=Path.Combine(Path.GetTempPath(),"LLAI-menu-policy-"+Guid.NewGuid().ToString("N"));var f=new ProfileFiles(folder);Reject(delegate{f.Read("../secret");});Reject(delegate{f.Read("CON");});Reject(delegate{f.Write("Large",new Dictionary<string,object>{{"x",new string('x',140000)}});});Assert(!Directory.Exists(folder));});
         check("profile export roundtrip stays in dedicated folder",delegate{string folder=Path.Combine(Path.GetTempPath(),"LLAI-menu-policy-"+Guid.NewGuid().ToString("N"));var f=new ProfileFiles(folder);try{f.Write("QA profile",new Dictionary<string,object>{{"version",4},{"name","QA profile"}});Assert(f.List().SequenceEqual(new[]{"QA profile"})&&Wire.Integer(f.Read("QA profile"),"version",4,4)==4);}finally{if(Directory.Exists(folder))Directory.Delete(folder,true);}});
+        check("simplified menu: <=6 pages, <=8 rows each, every key resolves, world keys by prefix",delegate{
+            Assert(MenuPages.Pages.Length<=6);var world=NativeMenuWorldDefinitions();
+            foreach(var p in MenuPages.Pages){Assert(p.Items.Length<=8);foreach(var i in p.Items)if(i.Kind=="setting")foreach(var k in i.Keys){var d=MenuPageRules.Definition(k,world);Assert(d.Key==MenuPageRules.StoreKey(k));Assert(MenuPageRules.IsWorld(k)==(Array.IndexOf(world,d)>=0));}}
+            // NPC catalog has a group literally named "World director"; those keys must still resolve as NPC settings.
+            foreach(var s in SettingsCatalog.All.Where(x=>x.Group=="World director"))Assert(!MenuPageRules.IsWorld(s.Key)&&MenuPageRules.Definition(s.Key,world)==s);
+            Reject(delegate{MenuPageRules.Definition("world.notAKey",world);});Reject(delegate{MenuPageRules.Definition("notA.key",world);});
+            Assert(MenuPageRules.Page("advanced").Items.Any(i=>i.Id=="restoreDefaults")&&MenuPageRules.Page("advanced").Items.Any(i=>i.Id=="panic"));
+        });
+        check("city presets match, cycle and validate in both scopes",delegate{
+            var npc=SettingsCatalog.Defaults();var world=new DirectorSettings().Snapshot();Assert(MenuPageRules.MatchCityPreset(npc,world)=="Normal");
+            var busy=MenuPages.CityPresets.First(p=>p.Name=="Busy");for(int i=0;i<busy.NpcKeys.Length;i++)npc[busy.NpcKeys[i]]=busy.NpcValues[i];Assert(MenuPageRules.MatchCityPreset(npc,world)=="Custom");
+            for(int i=0;i<busy.WorldKeys.Length;i++)world[busy.WorldKeys[i]]=busy.WorldValues[i];Assert(MenuPageRules.MatchCityPreset(npc,world)=="Busy");
+            Assert(SettingsCatalog.Validate(npc).Count==SettingsCatalog.All.Length);DirectorSettings.Parse(world);
+            Assert(MenuPageRules.NextCityPreset("Normal",1).Name=="Busy"&&MenuPageRules.NextCityPreset("Busy",1).Name=="Quiet"&&MenuPageRules.NextCityPreset("Quiet",-1).Name=="Busy"&&MenuPageRules.NextCityPreset("Custom",1).Name=="Normal");
+        });
+        check("composite rows report Mixed and switch every key together",delegate{Assert(Equals(MenuPageRules.CompositeValue(new List<object>{true,true}),true));Assert(MenuPageRules.CompositeValue(new List<object>{true,false})==null);Assert(MenuPageRules.CompositeNext(null)&&!MenuPageRules.CompositeNext(true)&&MenuPageRules.CompositeNext(false));});
+        check("mic test route is whitelisted for POST only",delegate{Assert(DashboardTransport.MenuRouteAllowed("POST","api/ptt/mic-test"));Assert(!DashboardTransport.MenuRouteAllowed("GET","api/ptt/mic-test"));Assert(DashboardTransport.MenuRouteAllowed("POST","api/profiles/Realistic/apply"));});
     }
+    // Mirrors NativeMenu.WorldDefinitions (GTA-dependent class) from the GTA-independent DirectorSettings snapshot.
+    private static SettingDefinition[] NativeMenuWorldDefinitions(){return new DirectorSettings().Snapshot().Select(p=>new SettingDefinition{Key=p.Key,Label=p.Key,Group="World director",Kind=p.Value is bool?"boolean":"number",Default=p.Value,Options=new string[0]}).ToArray();}
 }

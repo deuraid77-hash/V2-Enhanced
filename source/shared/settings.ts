@@ -32,6 +32,7 @@ group('General', 'game', 'general', [
   ['debugOverlay',false,'Show measured script Tick cost and job counts.'],
   ['menuSounds',true,'Play game menu navigation cues.'],
   ['safeMode',false,'Keep only menu and diagnostics active; cancel world and NPC work.'],
+  ['subtitles',true,'Show NPC conversation subtitles on screen.'],
 ]);
 group('AI', 'ai', 'ai', [
   ['enabled',true,'Allow provider jobs, subject to the combined daily budget.'],
@@ -83,7 +84,9 @@ group('Conversation', 'game', 'conversation', [
   ['language','English','Requested dialogue and transcription language; bounded to 40 characters.'],
   ['prewarmMeters',12,'Distance at which eligible nearby NPC personas may be prepared.',[5,30]],
   ['maxTurns',12,'Maximum turns before the conversation wraps up.',[2,30]],
-  ['pushToTalk',false,'Enable microphone capture only while the talk control is held.'],
+  ['pushToTalk',true,'Talk to NPCs with your voice. The microphone is captured only while the talk control is held.'],
+  ['tapToTalk',false,'Tap the talk control once to start listening; capture stops after a short silence.'],
+  ['typedFallback',false,'Hidden fallback for players without a microphone: typed talk key and controller reply wheel.'],
 ]);
 group('Mind and memory', 'memory', 'memory', [
   ['enabled',true,'Use bounded working, episode and summary memory.'],
@@ -224,11 +227,18 @@ export const DEFAULT_NPC_SETTINGS: Readonly<NpcSettings> = Object.freeze(Object.
 // These are the only fields absent from the complete Step 2 V4 snapshot.
 // Permit this exact additive migration, never arbitrary partial saved state.
 export const STEP3_ADDED_SETTINGS = ['safety.allowPoliceResponse','safety.maxPoliceResponseWanted'] as const;
+// Simplify-and-Voice (2026-10-04) additions. A document missing these predates voice-first
+// talk, so migration also switches conversation.pushToTalk on once (the user chose voice).
+export const SIMPLIFY_ADDED_SETTINGS = ['general.subtitles','conversation.tapToTalk','conversation.typedFallback'] as const;
 export function migrateSavedNpcSettings(value: unknown): NpcSettings {
   const parsed=validateNpcSettings(value,true);
-  const missing=SETTINGS_CATALOG.filter(s=>!Object.hasOwn(parsed,s.key)).map(s=>s.key);
-  if(missing.length&&!(missing.length===STEP3_ADDED_SETTINGS.length&&STEP3_ADDED_SETTINGS.every(key=>missing.includes(key)))) throw new Error('Incomplete saved settings snapshot.');
-  return validateNpcSettings({...DEFAULT_NPC_SETTINGS,...parsed},false);
+  const missing=new Set(SETTINGS_CATALOG.filter(s=>!Object.hasOwn(parsed,s.key)).map(s=>s.key));
+  const groups=[STEP3_ADDED_SETTINGS,SIMPLIFY_ADDED_SETTINGS] as readonly (readonly string[])[];
+  const covered=new Set<string>();
+  for(const keys of groups){const absent=keys.filter(k=>missing.has(k)).length;if(absent===0)continue;if(absent!==keys.length)throw new Error('Incomplete saved settings snapshot.');keys.forEach(k=>covered.add(k));}
+  if(covered.size!==missing.size) throw new Error('Incomplete saved settings snapshot.');
+  const voiceFirst=SIMPLIFY_ADDED_SETTINGS.every(k=>missing.has(k))?{'conversation.pushToTalk':true}:{};
+  return validateNpcSettings({...DEFAULT_NPC_SETTINGS,...parsed,...voiceFirst},false);
 }
 const byKey = new Map(SETTINGS_CATALOG.map(s => [s.key,s]));
 export function validateNpcSettings(value: unknown, partial = true): NpcSettings {
