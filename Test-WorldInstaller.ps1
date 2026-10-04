@@ -59,15 +59,19 @@ $taskMockHealth=[pscustomobject]@{mode='enhanced-companion';version='2.4.0-enhan
 $taskOldRefused=$false
 try { & (Join-Path $taskPackage 'Start-V2-Companion.ps1') -NoBrowser } catch { $taskOldRefused=$_.Exception.Message -match 'incompatible Living Los Santos companion' }
 Assert-WorldInstall $taskOldRefused 'launcher refuses the old version 2 companion instead of falsely reporting readiness'
-$taskMockHealth=[pscustomobject]@{mode='enhanced-companion';version='3.0.0-enhanced-world';worldRuntime=[pscustomobject]@{protocol=2}}
+$taskMockHealth=[pscustomobject]@{mode='enhanced-companion';version='4.0.0-enhanced-foundation';worldRuntime=[pscustomobject]@{protocol=3}}
 $taskWrongProtocolRefused=$false
 try { & (Join-Path $taskPackage 'Start-V2-Companion.ps1') -NoBrowser } catch { $taskWrongProtocolRefused=$_.Exception.Message -match 'incompatible Living Los Santos companion' }
-Assert-WorldInstall $taskWrongProtocolRefused 'launcher requires protocol 3 in addition to a version 3 label'
-$taskMockHealth=[pscustomobject]@{mode='enhanced-companion';version='2.4.0-enhanced-adapter';worldRuntime=[pscustomobject]@{protocol=3}}
+Assert-WorldInstall $taskWrongProtocolRefused 'launcher requires protocol 4 in addition to a version 4 label'
+$taskMockHealth=[pscustomobject]@{mode='enhanced-companion';version='3.0.0-enhanced-world';worldRuntime=[pscustomobject]@{protocol=4}}
 $taskWrongVersionRefused=$false
 try { & (Join-Path $taskPackage 'Start-V2-Companion.ps1') -NoBrowser } catch { $taskWrongVersionRefused=$_.Exception.Message -match 'incompatible Living Los Santos companion' }
-Assert-WorldInstall $taskWrongVersionRefused 'launcher requires version 3 in addition to a protocol 3 label'
+Assert-WorldInstall $taskWrongVersionRefused 'launcher requires version 4 in addition to a protocol 4 label'
 $taskMockHealth=[pscustomobject]@{mode='enhanced-companion';version='3.0.0-enhanced-world';worldRuntime=[pscustomobject]@{protocol=3}}
+$taskV3Refused=$false
+try { & (Join-Path $taskPackage 'Start-V2-Companion.ps1') -NoBrowser } catch { $taskV3Refused=$_.Exception.Message -match 'incompatible Living Los Santos companion' }
+Assert-WorldInstall $taskV3Refused 'launcher refuses a running version 3 / protocol 3 companion'
+$taskMockHealth=[pscustomobject]@{mode='enhanced-companion';version='4.0.0-enhanced-foundation';worldRuntime=[pscustomobject]@{protocol=4}}
 & (Join-Path $taskPackage 'Start-V2-Companion.ps1') -NoBrowser
 Assert-WorldInstall ($taskMockStarts -eq 0) 'compatible companion is reused and incompatible running processes are never stopped or relaunched'
 [pscustomobject]@{checkedAt=[DateTime]::UtcNow.ToString('o');fixture=$taskFixture;passed=$taskChecks.Count;checks=$taskChecks;realGameTouched=$false}|ConvertTo-Json -Depth 4|Set-Content -LiteralPath (Join-Path $taskRoot 'world-installer-tests.json')
